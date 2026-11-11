@@ -39,12 +39,12 @@ interface AdminDashboardProps {
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   competitionState,
 }) => {
-  // Session token state from sessionStorage
+  // Session token state from sessionStorage or localStorage
   const [adminToken, setAdminToken] = useState<string | null>(() => {
-    return sessionStorage.getItem('quizmania_admin_token');
+    return sessionStorage.getItem('quizmania_admin_token') || localStorage.getItem('quizmania_admin_session_token');
   });
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    const token = sessionStorage.getItem('quizmania_admin_token');
+    const token = sessionStorage.getItem('quizmania_admin_token') || localStorage.getItem('quizmania_admin_session_token');
     return competitionService.verifyAdminSession(token);
   });
 
@@ -96,6 +96,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setAdminToken(res.token);
         setIsAuthenticated(true);
         sessionStorage.setItem('quizmania_admin_token', res.token);
+        try {
+          localStorage.setItem('quizmania_admin_session_token', res.token);
+        } catch {}
         setPasswordInput('');
         refreshData();
       } else {
@@ -113,6 +116,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       competitionService.logoutAdmin(adminToken);
     }
     sessionStorage.removeItem('quizmania_admin_token');
+    try {
+      localStorage.removeItem('quizmania_admin_session_token');
+    } catch {}
     setAdminToken(null);
     setIsAuthenticated(false);
     setUsernameInput('');
@@ -248,6 +254,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 placeholder="Enter administrator password"
                 className="w-full px-4 py-3 rounded-xl border border-[#E7EAF0] bg-white text-xs text-[#172033] placeholder-[#8E9BAE] focus:outline-none focus:ring-2 focus:ring-[#465FE5] shadow-soft-sm font-medium"
               />
+              <p className="text-[11px] text-[#8E9BAE] mt-1.5 flex items-center justify-between">
+                <span>Authorized institutional officers &amp; tournament directors only.</span>
+              </p>
             </div>
 
             <div className="pt-2">
@@ -289,11 +298,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* Top Admin Header Bar */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-[#E7EAF0] mb-8">
         <div>
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
             <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#16845B] bg-[#E8F5E9] border border-[#C8E6C9] px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
               <ShieldCheck className="w-3 h-3" />
               Verified Session Active
             </span>
+            {competitionService.getCloudBackendStatus().isConfigured ? (
+              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#465FE5] bg-[#E9EDFF] border border-[#C5D0FF] px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#465FE5] animate-pulse" />
+                Cloud Synchronized
+              </span>
+            ) : (
+              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#647084] bg-[#F1F4F9] border border-[#E7EAF0] px-2.5 py-0.5 rounded-full inline-flex items-center gap-1">
+                Resilient Standalone Mode
+              </span>
+            )}
             <span className="text-xs text-[#8E9BAE] font-mono">
               Token: {adminToken?.slice(0, 16)}...
             </span>
