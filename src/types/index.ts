@@ -115,7 +115,7 @@ export interface StudentExamAttempt {
   attemptId: string;
   participantId: string;
   roundNumber: 1 | 2;
-  paperId: 'general-paper' | 'subject-paper';
+  paperId: string;
   paperName: string;
   startTime: number;
   durationSeconds: number; // nominal total (e.g. 200 seconds for 10 questions)
@@ -227,8 +227,7 @@ export interface AttemptAuditReport {
 export type { 
   Question, 
   QuestionOption, 
-  QuestionWithAnswer, 
-  CompetitionRound, 
-  MarkingScheme, 
-  ExamPaperMapping 
+  CompetitionRound,
+  ExamPaperMapping,
+  MarkingScheme
 } from '../data/questions';

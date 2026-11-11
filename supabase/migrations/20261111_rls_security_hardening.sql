@@ -91,3 +91,4 @@ GRANT EXECUTE ON FUNCTION public.get_server_time() TO anon, authenticated, servi
 GRANT EXECUTE ON FUNCTION public.register_participant(TEXT, TEXT, TEXT, TEXT) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.submit_student_answer(UUID, TEXT, TEXT) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.get_leaderboard(UUID) TO anon, authenticated, service_role;
+

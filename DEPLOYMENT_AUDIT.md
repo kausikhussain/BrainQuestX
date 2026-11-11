@@ -145,3 +145,4 @@ The production deployment requires **strictly two** client-facing variables conf
 | **Local-Only Exam Storage** | Critical | `ExamWorkspace.tsx` saves to phone's `localStorage` instead of Supabase. | Connect `submitExamAttempt()` to Supabase PostgreSQL table writes. |
 
 *Report generated and validated against actual local source code and compiled assets.*
+

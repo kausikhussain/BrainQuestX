@@ -4,10 +4,6 @@ export interface QuestionOption {
   text: string;
 }
 
-export interface QuestionOptionWithAnswer extends QuestionOption {
-  isCorrect: boolean;
-}
-
 export interface Question {
   id: string;
   roundNumber: 1 | 2;
@@ -15,12 +11,6 @@ export interface Question {
   text: string;
   points: number;
   options: QuestionOption[];
-}
-
-export interface QuestionWithAnswer extends Question {
-  options: QuestionOptionWithAnswer[];
-  correctOptionId: string;
-  explanation?: string;
 }
 
 export interface CompetitionRound {
@@ -33,57 +23,69 @@ export interface CompetitionRound {
   totalQuestions: number;
 }
 
+export interface ExamPaperMapping {
+  roundNumber: 1 | 2;
+  paperId: string;
+  paperName: string;
+  sourceFile: string;
+  totalQuestions: number;
+  timePerQuestionSeconds: number;
+  totalDurationSeconds: number;
+  maxMarks: number;
+  markingScheme: {
+    correct: number;
+    incorrect: number;
+    unanswered: number;
+  };
+}
+
 export interface MarkingScheme {
   correctMarks: number;
   incorrectMarks: number;
-  unansweredMarks: number;
-  negativeMarkingEnabled: boolean;
+  negativeEnabled: boolean;
+  round1CutoffMarks: number;
+  round1MaxMarks: number;
+  round2MaxMarks: number;
+  grandTotalMaxMarks: number;
 }
 
-export const OFFICIAL_MARKING_SCHEME: MarkingScheme = {
-  correctMarks: 10,
-  incorrectMarks: 0,
-  unansweredMarks: 0,
-  negativeMarkingEnabled: false,
-};
-
-export interface ExamPaperMapping {
-  roundNumber: 1 | 2;
-  paperId: 'general-paper' | 'subject-paper';
-  paperName: string;
-  sourceDoc: string;
-  totalQuestions: 10;
-  maxMarks: 100;
-  durationMinutes: 10;
-  description: string;
-}
-
-/**
- * MANDATORY PAPER ASSIGNMENT MAPPING
- * Round 1 = General Paper (Source: Generalpaper.docx)
- * Round 2 = Subject Paper (Source: Subjectpaper.docx)
- */
 export const OFFICIAL_ROUND_PAPERS: Record<1 | 2, ExamPaperMapping> = {
   1: {
     roundNumber: 1,
     paperId: 'general-paper',
-    paperName: 'General Paper',
-    sourceDoc: 'Generalpaper.docx',
+    paperName: 'General Paper (Computer Fundamentals & Tech)',
+    sourceFile: 'Generalpaper.docx',
     totalQuestions: 10,
+    timePerQuestionSeconds: 20,
+    totalDurationSeconds: 200,
     maxMarks: 100,
-    durationMinutes: 10,
-    description: 'Initial screening assessment covering Computer Fundamentals, Communication Hardware, File Formats, Binary Numbers, and Operating Systems.',
+    markingScheme: { correct: 10, incorrect: 0, unanswered: 0 },
   },
   2: {
     roundNumber: 2,
-    paperId: 'subject-paper',
-    paperName: 'Subject Paper (Python Programming)',
-    sourceDoc: 'Subjectpaper.docx',
+    paperId: 'subject-paper-python',
+    paperName: 'Subject Paper (Core Python Programming)',
+    sourceFile: 'Subjectpaper.docx',
     totalQuestions: 10,
+    timePerQuestionSeconds: 20,
+    totalDurationSeconds: 200,
     maxMarks: 100,
-    durationMinutes: 10,
-    description: 'Second-stage examination for officially shortlisted candidates evaluating Python syntax, mutability, built-ins, loops, and indexing.',
+    markingScheme: { correct: 10, incorrect: 0, unanswered: 0 },
   },
+};
+
+export const OFFICIAL_MARKING_SCHEME: MarkingScheme = {
+  correctMarks: 10,
+  incorrectMarks: 0,
+  negativeEnabled: false,
+  round1CutoffMarks: 60,
+  round1MaxMarks: 100,
+  round2MaxMarks: 100,
+  grandTotalMaxMarks: 200,
+};
+
+export const getPaperConfig = (roundNumber: 1 | 2): ExamPaperMapping => {
+  return OFFICIAL_ROUND_PAPERS[roundNumber];
 };
 
 export const COMPETITION_ROUNDS: CompetitionRound[] = [
@@ -108,12 +110,13 @@ export const COMPETITION_ROUNDS: CompetitionRound[] = [
 ];
 
 /**
- * Server-authoritative Question Bank with verified answer keys.
- * Source: Generalpaper.docx and Subjectpaper.docx
+ * Public candidate-safe question repository.
+ * Contains strictly question prompts and options.
+ * Correct answers, option correctness flags, and answer keys
+ * are NEVER stored here; they reside exclusively within PostgreSQL in Supabase.
  */
-export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
+export const CLIENT_QUESTIONS: Question[] = [
   // ==================== ROUND 1: GENERAL PAPER ====================
-  // Source: Generalpaper.docx (Exactly 10 questions)
   {
     id: 'r1-q1',
     roundNumber: 1,
@@ -121,13 +124,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'Which of the following is a communication device ?',
     points: 10,
     options: [
-      { id: 'r1-q1-a', label: 'A', text: 'Printer', isCorrect: false },
-      { id: 'r1-q1-b', label: 'B', text: 'Monitor', isCorrect: false },
-      { id: 'r1-q1-c', label: 'C', text: 'Keyboard', isCorrect: false },
-      { id: 'r1-q1-d', label: 'D', text: 'Modem', isCorrect: true },
+      { id: 'r1-q1-a', label: 'A', text: 'Printer' },
+      { id: 'r1-q1-b', label: 'B', text: 'Monitor' },
+      { id: 'r1-q1-c', label: 'C', text: 'Keyboard' },
+      { id: 'r1-q1-d', label: 'D', text: 'Modem' },
     ],
-    correctOptionId: 'r1-q1-d',
-    explanation: 'A modem (modulator-demodulator) is a communication device that converts signals for transmission across networks.',
   },
   {
     id: 'r1-q2',
@@ -136,13 +137,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'Which of the following file extensions indicate only graphics file ?',
     points: 10,
     options: [
-      { id: 'r1-q2-a', label: 'A', text: 'BMP and DOC', isCorrect: false },
-      { id: 'r1-q2-b', label: 'B', text: 'JPEG and TXT', isCorrect: false },
-      { id: 'r1-q2-c', label: 'C', text: 'TXT and STK', isCorrect: false },
-      { id: 'r1-q2-d', label: 'D', text: 'BMP and GIF', isCorrect: true },
+      { id: 'r1-q2-a', label: 'A', text: 'BMP and DOC' },
+      { id: 'r1-q2-b', label: 'B', text: 'JPEG and TXT' },
+      { id: 'r1-q2-c', label: 'C', text: 'TXT and STK' },
+      { id: 'r1-q2-d', label: 'D', text: 'BMP and GIF' },
     ],
-    correctOptionId: 'r1-q2-d',
-    explanation: 'BMP (Bitmap) and GIF (Graphics Interchange Format) are both graphics/image file formats.',
   },
   {
     id: 'r1-q3',
@@ -151,13 +150,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'To create a para Break in MS-WORD , which key is used ?',
     points: 10,
     options: [
-      { id: 'r1-q3-a', label: 'A', text: 'Enter', isCorrect: true },
-      { id: 'r1-q3-b', label: 'B', text: 'Esc', isCorrect: false },
-      { id: 'r1-q3-c', label: 'C', text: 'Tab', isCorrect: false },
-      { id: 'r1-q3-d', label: 'D', text: 'Shift', isCorrect: false },
+      { id: 'r1-q3-a', label: 'A', text: 'Enter' },
+      { id: 'r1-q3-b', label: 'B', text: 'Esc' },
+      { id: 'r1-q3-c', label: 'C', text: 'Tab' },
+      { id: 'r1-q3-d', label: 'D', text: 'Shift' },
     ],
-    correctOptionId: 'r1-q3-a',
-    explanation: 'Pressing Enter creates a paragraph break in Microsoft Word (Shift+Enter creates a line break).',
   },
   {
     id: 'r1-q4',
@@ -166,13 +163,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'What type of software is Linux?',
     points: 10,
     options: [
-      { id: 'r1-q4-a', label: 'A', text: 'Compiler', isCorrect: false },
-      { id: 'r1-q4-b', label: 'B', text: 'Operating System', isCorrect: true },
-      { id: 'r1-q4-c', label: 'C', text: 'Utility Software', isCorrect: false },
-      { id: 'r1-q4-d', label: 'D', text: 'Application Software', isCorrect: false },
+      { id: 'r1-q4-a', label: 'A', text: 'Compiler' },
+      { id: 'r1-q4-b', label: 'B', text: 'Operating System' },
+      { id: 'r1-q4-c', label: 'C', text: 'Utility Software' },
+      { id: 'r1-q4-d', label: 'D', text: 'Application Software' },
     ],
-    correctOptionId: 'r1-q4-b',
-    explanation: 'Linux is an open-source Unix-like operating system kernel and operating system family.',
   },
   {
     id: 'r1-q5',
@@ -181,13 +176,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'Which software would you use to teach students in computer classes ?',
     points: 10,
     options: [
-      { id: 'r1-q5-a', label: 'A', text: 'Spreadsheet', isCorrect: false },
-      { id: 'r1-q5-b', label: 'B', text: 'Database', isCorrect: false },
-      { id: 'r1-q5-c', label: 'C', text: 'Word processing', isCorrect: false },
-      { id: 'r1-q5-d', label: 'D', text: 'Power point', isCorrect: true },
+      { id: 'r1-q5-a', label: 'A', text: 'Spreadsheet' },
+      { id: 'r1-q5-b', label: 'B', text: 'Database' },
+      { id: 'r1-q5-c', label: 'C', text: 'Word processing' },
+      { id: 'r1-q5-d', label: 'D', text: 'Power point' },
     ],
-    correctOptionId: 'r1-q5-d',
-    explanation: 'PowerPoint presentation software is designed for classroom teaching, lecture slides, and presentations.',
   },
   {
     id: 'r1-q6',
@@ -196,13 +189,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'Decimal equivalent of binary number 110111 is :',
     points: 10,
     options: [
-      { id: 'r1-q6-a', label: 'A', text: '55', isCorrect: true },
-      { id: 'r1-q6-b', label: 'B', text: '56', isCorrect: false },
-      { id: 'r1-q6-c', label: 'C', text: '57', isCorrect: false },
-      { id: 'r1-q6-d', label: 'D', text: '58', isCorrect: false },
+      { id: 'r1-q6-a', label: 'A', text: '55' },
+      { id: 'r1-q6-b', label: 'B', text: '56' },
+      { id: 'r1-q6-c', label: 'C', text: '57' },
+      { id: 'r1-q6-d', label: 'D', text: '58' },
     ],
-    correctOptionId: 'r1-q6-a',
-    explanation: '110111 in binary = 1*32 + 1*16 + 0*8 + 1*4 + 1*2 + 1*1 = 32 + 16 + 4 + 2 + 1 = 55.',
   },
   {
     id: 'r1-q7',
@@ -211,13 +202,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: '1 KB equals to how many bytes ?',
     points: 10,
     options: [
-      { id: 'r1-q7-a', label: 'A', text: '1000 bytes', isCorrect: false },
-      { id: 'r1-q7-b', label: 'B', text: '1024  bytes', isCorrect: true },
-      { id: 'r1-q7-c', label: 'C', text: '2012 bytes', isCorrect: false },
-      { id: 'r1-q7-d', label: 'D', text: 'None of the above', isCorrect: false },
+      { id: 'r1-q7-a', label: 'A', text: '1000 bytes' },
+      { id: 'r1-q7-b', label: 'B', text: '1024  bytes' },
+      { id: 'r1-q7-c', label: 'C', text: '2012 bytes' },
+      { id: 'r1-q7-d', label: 'D', text: 'None of the above' },
     ],
-    correctOptionId: 'r1-q7-b',
-    explanation: '1 Kilobyte (KB) in standard binary computing equals 2^10 = 1024 bytes.',
   },
   {
     id: 'r1-q8',
@@ -226,13 +215,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'Which of the following translates a program written in high level language into machine code ?',
     points: 10,
     options: [
-      { id: 'r1-q8-a', label: 'A', text: 'Assembler', isCorrect: false },
-      { id: 'r1-q8-b', label: 'B', text: 'Compiler', isCorrect: false },
-      { id: 'r1-q8-c', label: 'C', text: 'Interpreter', isCorrect: false },
-      { id: 'r1-q8-d', label: 'D', text: 'Both B and C', isCorrect: true },
+      { id: 'r1-q8-a', label: 'A', text: 'Assembler' },
+      { id: 'r1-q8-b', label: 'B', text: 'Compiler' },
+      { id: 'r1-q8-c', label: 'C', text: 'Interpreter' },
+      { id: 'r1-q8-d', label: 'D', text: 'Both B and C' },
     ],
-    correctOptionId: 'r1-q8-d',
-    explanation: 'Both compilers (translating entire code before execution) and interpreters (translating line by line) translate high level code.',
   },
   {
     id: 'r1-q9',
@@ -241,13 +228,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'Which of the following is the fastest memory ?',
     points: 10,
     options: [
-      { id: 'r1-q9-a', label: 'A', text: 'Secondary memory', isCorrect: false },
-      { id: 'r1-q9-b', label: 'B', text: 'Auxiliary memory', isCorrect: false },
-      { id: 'r1-q9-c', label: 'C', text: 'Cache memory', isCorrect: true },
-      { id: 'r1-q9-d', label: 'D', text: 'Virtual memory', isCorrect: false },
+      { id: 'r1-q9-a', label: 'A', text: 'Secondary memory' },
+      { id: 'r1-q9-b', label: 'B', text: 'Auxiliary memory' },
+      { id: 'r1-q9-c', label: 'C', text: 'Cache memory' },
+      { id: 'r1-q9-d', label: 'D', text: 'Virtual memory' },
     ],
-    correctOptionId: 'r1-q9-c',
-    explanation: 'Cache memory sits closest to the CPU processor and operates at the fastest access speed among the listed options.',
   },
   {
     id: 'r1-q10',
@@ -256,17 +241,14 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'Which of the following file extensions indicate file created in paint ?',
     points: 10,
     options: [
-      { id: 'r1-q10-a', label: 'A', text: 'BMP', isCorrect: true },
-      { id: 'r1-q10-b', label: 'B', text: 'DOC', isCorrect: false },
-      { id: 'r1-q10-c', label: 'C', text: 'STK', isCorrect: false },
-      { id: 'r1-q10-d', label: 'D', text: 'PPT', isCorrect: false },
+      { id: 'r1-q10-a', label: 'A', text: 'BMP' },
+      { id: 'r1-q10-b', label: 'B', text: 'DOC' },
+      { id: 'r1-q10-c', label: 'C', text: 'STK' },
+      { id: 'r1-q10-d', label: 'D', text: 'PPT' },
     ],
-    correctOptionId: 'r1-q10-a',
-    explanation: 'BMP (Bitmap) is the classic native raster image format created and saved by Microsoft Paint.',
   },
 
   // ==================== ROUND 2: SUBJECT PAPER ====================
-  // Source: Subjectpaper.docx (Exactly 10 questions)
   {
     id: 'r2-q1',
     roundNumber: 2,
@@ -274,28 +256,24 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'Father of Python is   ……………………….',
     points: 10,
     options: [
-      { id: 'r2-q1-a', label: 'A', text: 'James Gosling', isCorrect: false },
-      { id: 'r2-q1-b', label: 'B', text: 'Guido van Rossum', isCorrect: true },
-      { id: 'r2-q1-c', label: 'C', text: 'Gudio van Rossam', isCorrect: false },
-      { id: 'r2-q1-d', label: 'D', text: 'Dennis Ritchie', isCorrect: false },
+      { id: 'r2-q1-a', label: 'A', text: 'James Gosling' },
+      { id: 'r2-q1-b', label: 'B', text: 'Guido van Rossum' },
+      { id: 'r2-q1-c', label: 'C', text: 'Gudio van Rossam' },
+      { id: 'r2-q1-d', label: 'D', text: 'Dennis Ritchie' },
     ],
-    correctOptionId: 'r2-q1-b',
-    explanation: 'Guido van Rossum created Python in the late 1980s at CWI in the Netherlands.',
   },
   {
     id: 'r2-q2',
     roundNumber: 2,
     questionNumber: 2,
-    text: 'Which of the following is the correct identifier ?',
+    text: ' Which of the following is the correct identifier ?',
     points: 10,
     options: [
-      { id: 'r2-q2-a', label: 'A', text: 'Break', isCorrect: true },
-      { id: 'r2-q2-b', label: 'B', text: 'def', isCorrect: false },
-      { id: 'r2-q2-c', label: 'C', text: 'with', isCorrect: false },
-      { id: 'r2-q2-d', label: 'D', text: 'global', isCorrect: false },
+      { id: 'r2-q2-a', label: 'A', text: 'Break' },
+      { id: 'r2-q2-b', label: 'B', text: 'def' },
+      { id: 'r2-q2-c', label: 'C', text: 'with' },
+      { id: 'r2-q2-d', label: 'D', text: 'global' },
     ],
-    correctOptionId: 'r2-q2-a',
-    explanation: 'Python is case-sensitive. While "break", "def", "with", and "global" are reserved keywords, "Break" (capital B) is a valid identifier.',
   },
   {
     id: 'r2-q3',
@@ -304,13 +282,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'Which of the following data type is immutable in Python?',
     points: 10,
     options: [
-      { id: 'r2-q3-a', label: 'A', text: 'List', isCorrect: false },
-      { id: 'r2-q3-b', label: 'B', text: 'Tuple', isCorrect: true },
-      { id: 'r2-q3-c', label: 'C', text: 'Set', isCorrect: false },
-      { id: 'r2-q3-d', label: 'D', text: 'Dictionary', isCorrect: false },
+      { id: 'r2-q3-a', label: 'A', text: 'List' },
+      { id: 'r2-q3-b', label: 'B', text: 'Tuple' },
+      { id: 'r2-q3-c', label: 'C', text: 'Set' },
+      { id: 'r2-q3-d', label: 'D', text: 'Dictionary' },
     ],
-    correctOptionId: 'r2-q3-b',
-    explanation: 'Tuples cannot be modified after creation, making them immutable in Python.',
   },
   {
     id: 'r2-q4',
@@ -319,13 +295,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'What does the count() function in Python do?',
     points: 10,
     options: [
-      { id: 'r2-q4-a', label: 'A', text: 'It counts the total number of characters in a string.', isCorrect: false },
-      { id: 'r2-q4-b', label: 'B', text: 'It counts the occurrences of a specified substring with in a string.', isCorrect: true },
-      { id: 'r2-q4-c', label: 'C', text: 'It returns true if all characters in the string are alphabets.', isCorrect: false },
-      { id: 'r2-q4-d', label: 'D', text: 'It returns true if all characters in the string are numbers.', isCorrect: false },
+      { id: 'r2-q4-a', label: 'A', text: 'It counts the total number of characters in a string.' },
+      { id: 'r2-q4-b', label: 'B', text: 'It counts the occurrences of a specified substring with in a string.' },
+      { id: 'r2-q4-c', label: 'C', text: 'It returns true if all characters in the string are alphabets.' },
+      { id: 'r2-q4-d', label: 'D', text: 'It returns true if all characters in the string are numbers.' },
     ],
-    correctOptionId: 'r2-q4-b',
-    explanation: 'str.count(sub) returns the number of non-overlapping occurrences of substring sub in the string.',
   },
   {
     id: 'r2-q5',
@@ -334,13 +308,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'If a function  is defined to return a value but does not include a return statement, what will be the result ?',
     points: 10,
     options: [
-      { id: 'r2-q5-a', label: 'A', text: 'The function will return a default value of 0.', isCorrect: false },
-      { id: 'r2-q5-b', label: 'B', text: 'The function will return an error.', isCorrect: false },
-      { id: 'r2-q5-c', label: 'C', text: 'The function will return None.', isCorrect: true },
-      { id: 'r2-q5-d', label: 'D', text: 'The function will return none.', isCorrect: false },
+      { id: 'r2-q5-a', label: 'A', text: 'The function will return a default value of 0.' },
+      { id: 'r2-q5-b', label: 'B', text: 'The function will return an error.' },
+      { id: 'r2-q5-c', label: 'C', text: 'The function will return None.' },
+      { id: 'r2-q5-d', label: 'D', text: 'The function will return none.' },
     ],
-    correctOptionId: 'r2-q5-c',
-    explanation: 'In Python, if a function terminates without an explicit return statement, it implicitly returns None (with capital N).',
   },
   {
     id: 'r2-q6',
@@ -349,13 +321,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'Which Python datatype maintains the order of element inserted ?',
     points: 10,
     options: [
-      { id: 'r2-q6-a', label: 'A', text: 'set', isCorrect: false },
-      { id: 'r2-q6-b', label: 'B', text: 'list', isCorrect: false },
-      { id: 'r2-q6-c', label: 'C', text: 'dict', isCorrect: false },
-      { id: 'r2-q6-d', label: 'D', text: 'Both B and C', isCorrect: true },
+      { id: 'r2-q6-a', label: 'A', text: 'set' },
+      { id: 'r2-q6-b', label: 'B', text: 'list' },
+      { id: 'r2-q6-c', label: 'C', text: 'dict' },
+      { id: 'r2-q6-d', label: 'D', text: 'Both B and C' },
     ],
-    correctOptionId: 'r2-q6-d',
-    explanation: 'Both lists and dictionaries (in standard Python 3.7+) maintain the insertion order of elements.',
   },
   {
     id: 'r2-q7',
@@ -364,13 +334,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'What is the significance of the break and else combination in a for loop ?',
     points: 10,
     options: [
-      { id: 'r2-q7-a', label: 'A', text: 'Executes else only if loop wasn’t exited by break.', isCorrect: true },
-      { id: 'r2-q7-b', label: 'B', text: 'It is a syntax error; break else cannot be used together.', isCorrect: false },
-      { id: 'r2-q7-c', label: 'C', text: 'It skips the current iteration.', isCorrect: false },
-      { id: 'r2-q7-d', label: 'D', text: 'It restarts the loop.', isCorrect: false },
+      { id: 'r2-q7-a', label: 'A', text: 'Executes else only if loop wasn’t exited by break.' },
+      { id: 'r2-q7-b', label: 'B', text: 'It is a syntax error; break else cannot be used together.' },
+      { id: 'r2-q7-c', label: 'C', text: 'It skips the current iteration.' },
+      { id: 'r2-q7-d', label: 'D', text: 'It restarts the loop.' },
     ],
-    correctOptionId: 'r2-q7-a',
-    explanation: 'The else block in a for loop runs only if the loop completed normally without encountering a break statement.',
   },
   {
     id: 'r2-q8',
@@ -379,13 +347,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'Li = [‘Alex’ , ‘Emma’ , ‘Bob’ , ‘Lucas’]\nprint(li[1][-1])',
     points: 10,
     options: [
-      { id: 'r2-q8-a', label: 'A', text: 'x', isCorrect: false },
-      { id: 'r2-q8-b', label: 'B', text: 'a', isCorrect: true },
-      { id: 'r2-q8-c', label: 'C', text: 's', isCorrect: false },
-      { id: 'r2-q8-d', label: 'D', text: 'b', isCorrect: false },
+      { id: 'r2-q8-a', label: 'A', text: 'x' },
+      { id: 'r2-q8-b', label: 'B', text: 'a' },
+      { id: 'r2-q8-c', label: 'C', text: 's' },
+      { id: 'r2-q8-d', label: 'D', text: 'b' },
     ],
-    correctOptionId: 'r2-q8-b',
-    explanation: 'li[1] accesses the second element "Emma". Index [-1] accesses its last character, which is "a". Note: In official school examinations, variable casing "Li" vs "li" is evaluated conceptually as "a".',
   },
   {
     id: 'r2-q9',
@@ -394,13 +360,11 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'li = list(range(100, 110))\nprint(li.index(105))',
     points: 10,
     options: [
-      { id: 'r2-q9-a', label: 'A', text: '105', isCorrect: false },
-      { id: 'r2-q9-b', label: 'B', text: '5', isCorrect: true },
-      { id: 'r2-q9-c', label: 'C', text: '106', isCorrect: false },
-      { id: 'r2-q9-d', label: 'D', text: '104', isCorrect: false },
+      { id: 'r2-q9-a', label: 'A', text: '105' },
+      { id: 'r2-q9-b', label: 'B', text: '5' },
+      { id: 'r2-q9-c', label: 'C', text: '106' },
+      { id: 'r2-q9-d', label: 'D', text: '104' },
     ],
-    correctOptionId: 'r2-q9-b',
-    explanation: 'The list is [100, 101, 102, 103, 104, 105, 106, 107, 108, 109]. The element 105 is at 0-based index 5.',
   },
   {
     id: 'r2-q10',
@@ -409,45 +373,22 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     text: 'Which of the following is a valid variable name in python ?',
     points: 10,
     options: [
-      { id: 'r2-q10-a', label: 'A', text: '1variable', isCorrect: false },
-      { id: 'r2-q10-b', label: 'B', text: 'my_variable', isCorrect: true },
-      { id: 'r2-q10-c', label: 'C', text: 'global', isCorrect: false },
-      { id: 'r2-q10-d', label: 'D', text: 'variable-1', isCorrect: false },
+      { id: 'r2-q10-a', label: 'A', text: '1variable' },
+      { id: 'r2-q10-b', label: 'B', text: 'my_variable' },
+      { id: 'r2-q10-c', label: 'C', text: 'global' },
+      { id: 'r2-q10-d', label: 'D', text: 'variable-1' },
     ],
-    correctOptionId: 'r2-q10-b',
-    explanation: 'my_variable conforms to identifier rules: cannot start with a digit, cannot be a keyword, and cannot contain hyphens.',
   },
 ];
 
-/**
- * Public client-safe questions with isCorrect stripped.
- * Used during active quiz display.
- */
-export const CLIENT_QUESTIONS: Question[] = SERVER_QUESTION_BANK.map((q) => ({
-  id: q.id,
-  roundNumber: q.roundNumber,
-  questionNumber: q.questionNumber,
-  text: q.text,
-  points: q.points,
-  options: q.options.map((opt) => ({
-    id: opt.id,
-    label: opt.label,
-    text: opt.text,
-  })),
-}));
-
-export const getPaperConfig = (roundNumber: 1 | 2): ExamPaperMapping => {
-  return OFFICIAL_ROUND_PAPERS[roundNumber];
+export const getRoundInfo = (roundNumber: 1 | 2): CompetitionRound => {
+  return COMPETITION_ROUNDS[roundNumber - 1];
 };
 
-export const getQuestionsForRound = (roundNumber: 1 | 2): Question[] => {
+export const getClientQuestionsForRound = (roundNumber: 1 | 2): Question[] => {
   return CLIENT_QUESTIONS.filter((q) => q.roundNumber === roundNumber);
 };
 
-export const getServerQuestionsForRound = (roundNumber: 1 | 2): QuestionWithAnswer[] => {
-  return SERVER_QUESTION_BANK.filter((q) => q.roundNumber === roundNumber);
-};
-
-export const calculateRoundMaxMarks = (roundNumber: 1 | 2): number => {
-  return getServerQuestionsForRound(roundNumber).reduce((sum, q) => sum + (q.points || 10), 0);
+export const getMaxMarksForRound = (roundNumber: 1 | 2): number => {
+  return getClientQuestionsForRound(roundNumber).reduce((sum, q) => sum + (q.points || 10), 0);
 };
