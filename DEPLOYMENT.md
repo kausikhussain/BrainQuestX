@@ -1,104 +1,119 @@
-# Quizmania Production Deployment Guide (Vercel + Supabase Cloud)
+# Quizmania Production Deployment & Database Initialization Guide
 
-This guide details the step-by-step production deployment procedure for **Quizmania** using **Vercel** for frontend delivery and **Supabase Cloud (PostgreSQL)** for backend persistence.
-
----
-
-## 1. Architecture Overview
-
-- **Frontend Hosting:** Vercel (Fast edge network serving static HTML/JS/CSS with HTTPS)
-- **Database & Backend:** Supabase Cloud (Managed PostgreSQL 15+ in AWS Mumbai `ap-south-1`)
-- **Real-Time Layer:** Supabase Realtime (Broadcasting competition state transitions)
-- **Security Layer:** PostgreSQL Row Level Security (RLS) + `SECURITY DEFINER` Stored Procedures (RPCs)
+This guide details the complete production database initialization procedure for **Quizmania** on **Supabase Cloud (PostgreSQL 15+)** connected to your frontend on **Vercel**.
 
 ---
 
-## 2. Step 1: Provision Supabase Cloud Project
+## 1. Current Diagnostic & Root Cause
 
-1. Sign in to [Supabase Dashboard](https://supabase.com/dashboard).
-2. Click **New Project** and name it `quizmania`.
-3. **Region Selection:** Choose a region close to your participants (e.g. `ap-south-1` Mumbai) for minimal network latency (< 25ms round-trip).
-4. **Database Password:** Generate a high-entropy database password (save it in your password manager).
-5. Wait ~2 minutes for the database cluster to finish provisioning.
+If your Supabase Dashboard displays:
+- **Status:** Healthy
+- **Last migration:** No migrations
+- **API Gateway errors:** ~98 errors (40.6% success rate)
+- **Symptom 1:** Student registration fails (`public.register_participant(...) not found`)
+- **Symptom 2:** Admin login returns `Invalid login credentials`
+- **Symptom 3:** Supabase Table Editor is empty (missing `competitions`, `participants`, `questions`)
 
----
-
-## 3. Step 2: Apply Database Migrations & Security Hardening
-
-Open the **SQL Editor** in the Supabase Dashboard:
-
-### 3.1 Run Initial Schema & Stored Procedures
-1. Open the file [`supabase/migrations/20261111_init_quizmania.sql`](file:///c:/Users/kunal%20sanga/Desktop/Quizmania/supabase/migrations/20261111_init_quizmania.sql).
-2. Paste the SQL into the editor and click **Run**.
-3. This creates:
-   - Tables: `competitions`, `rounds`, `questions`, `question_options`, `participants`, `submissions`
-   - Client view: `v_client_questions` (strips `is_correct`)
-   - Authoritative RPCs: `get_server_time`, `register_participant`, `submit_student_answer`, `get_leaderboard`
-
-### 3.2 Apply Row Level Security (RLS) Hardening
-1. Open the file [`supabase/migrations/20261111_rls_security_hardening.sql`](file:///c:/Users/kunal%20sanga/Desktop/Quizmania/supabase/migrations/20261111_rls_security_hardening.sql).
-2. Paste the SQL and click **Run**.
-3. This enforces:
-   - RLS enabled across all tables.
-   - Revokes direct `SELECT` on `question_options` from public `anon`.
-   - Forces question querying through `v_client_questions`.
-   - Protects submissions and participants against unauthorized writes.
-
-### 3.3 Seed the 20 Official Questions
-1. Open the file [`supabase/seed.sql`](file:///c:/Users/kunal%20sanga/Desktop/Quizmania/supabase/seed.sql).
-2. Paste the SQL and click **Run**.
-3. Confirms:
-   - Round 1 (General Paper): 10 questions seeded.
-   - Round 2 (Subject Paper - Python): 10 questions seeded.
+**Root Cause:**  
+Your Vercel frontend is successfully deployed and sending API requests to Supabase, but the database schema, RPC functions, and official question papers have not yet been applied to the live PostgreSQL instance.
 
 ---
 
-## 4. Step 3: Retrieve API Credentials
+## 2. Recommended Database Initialization: Single-Script Execution
 
-Navigate to **Project Settings** -> **API** in the Supabase Dashboard.
-Copy the following two values:
-- **Project URL:** e.g. `https://xyzcompany.supabase.co`
-- **Publishable / anon key:** e.g. `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...`
+To eliminate ordering conflicts or missed steps, we have prepared a single, consolidated, idempotent master script:
+[`supabase/COMPLETE_PRODUCTION_SETUP.sql`](file:///supabase/COMPLETE_PRODUCTION_SETUP.sql).
 
-> ⚠️ **CRITICAL SECURITY WARNING:**  
-> Never copy or use the `service_role` (secret) key in the frontend or in Vercel environment variables. The `service_role` key bypasses all Row Level Security and must remain strictly server-side.
+### Execution Steps:
+1. Open your [Supabase Project Dashboard](https://supabase.com/dashboard/project/ckxqkaawbntpaycagrlu).
+2. Click **SQL Editor** in the left navigation sidebar.
+3. Click **+ New query**.
+4. Open [`supabase/COMPLETE_PRODUCTION_SETUP.sql`](file:///supabase/COMPLETE_PRODUCTION_SETUP.sql), copy its entire contents, and paste it into the SQL Editor.
+5. Click **Run** (green button or press `Ctrl + Enter` / `Cmd + Enter`).
+6. Confirm the execution output says `Success. No rows returned` (executed in ~1.5 seconds).
+
+### What This Script Installs in One Step:
+- **Core Tables:** `competitions`, `rounds`, `questions`, `question_options`, `participants`, `submissions`, `exam_attempts`, `admin_roles`.
+- **Default Competition:** Bootstraps competition `QUIZ-2026` in status `registration_open`.
+- **Rounds 1 & 2:** Initializes General Paper (Round 1) and Python Subject Paper (Round 2).
+- **Official 20 Questions & 80 Options:** Seeds all questions from `Generalpaper.docx` and `Subjectpaper.docx` with answer keys securely stored in `question_options`.
+- **Row Level Security (RLS):**
+  - Revokes direct public access on `question_options` (prevents answer leaks).
+  - Enforces public access through client view `v_client_questions`.
+  - **Fixed RLS on `exam_attempts`:** Denies public/anon direct `SELECT` access, stopping candidate snooping.
+- **Server-Authoritative Stored Procedures (RPCs):**
+  - `register_participant`: Exact frontend signature, duplicate re-entry protection.
+  - `start_or_restore_attempt`: Idempotent session recovery without resetting timers or reshuffling.
+  - `save_attempt_answer`: Atomic answer persistence with deadline checks.
+  - `submit_exam_attempt_rpc`: Server-side scoring against `question_options.is_correct`.
+  - `record_fullscreen_event`: Telemetry logging.
+  - `get_leaderboard`: Multi-tier tie-breaking leaderboard matching frontend interface.
+  - `verify_admin_role_rpc`: Server-side RBAC role verification.
 
 ---
 
-## 5. Step 4: Deploy to Vercel
+## 3. Alternative: Ordered Migration Set Execution
 
-1. Log in to [Vercel](https://vercel.com/new).
-2. Import the GitHub repository: `https://github.com/kunalsanga/quizmania`.
-3. Configure the Project:
-   - **Framework Preset:** Vite
-   - **Root Directory:** `./`
-   - **Build Command:** `npm run build`
-   - **Output Directory:** `dist`
-   - **Install Command:** `npm install`
-4. In **Environment Variables**, add:
+If you prefer applying migrations as individual discrete steps:
+
+| Step | File | Purpose |
+| :--- | :--- | :--- |
+| **Step 1** | [`supabase/migrations/20261111_init_quizmania.sql`](file:///supabase/migrations/20261111_init_quizmania.sql) | Core schema, base competition, rounds, and `get_server_time` RPC. |
+| **Step 2** | [`supabase/seed.sql`](file:///supabase/seed.sql) | Seeds 20 questions and options idempotently (`ON CONFLICT DO NOTHING`, zero `TRUNCATE`). |
+| **Step 3** | [`supabase/migrations/20261111_production_remediation.sql`](file:///supabase/migrations/20261111_production_remediation.sql) | Creates `exam_attempts`, `admin_roles`, hardened RLS policies, and all 7 authoritative RPCs. |
+
+Execute each script sequentially in the Supabase **SQL Editor**.
+
+---
+
+## 4. Admin Account Onboarding (Supabase Auth)
+
+Because admin passwords are no longer hardcoded into client code, an administrator account must be created in Supabase Auth and mapped to the `admin_roles` table:
+
+### Step 4.1: Create Admin User in Supabase Auth
+1. In the Supabase Dashboard, go to **Authentication -> Users**.
+2. Click **Add User -> Create User**.
+3. Enter your administrator email (e.g., `admin@quizmania.org`).
+4. Enter a strong, high-entropy password (e.g., `AdminSecure2026!#`).
+5. Toggle **Auto Confirm User** to **ON** (so email verification is not required).
+6. Click **Create User**.
+
+### Step 4.2: Grant Admin Role in PostgreSQL
+1. Return to **SQL Editor** in the Supabase Dashboard.
+2. Run this query (replace `admin@quizmania.org` with the email you used):
+   ```sql
+   INSERT INTO public.admin_roles (user_id, role, email, granted_by)
+   SELECT id, 'SUPERADMIN', email, 'Initial Deployment'
+   FROM auth.users
+   WHERE email = 'admin@quizmania.org'
+   ON CONFLICT (user_id) DO UPDATE SET role = 'SUPERADMIN';
+   ```
+3. Test login: Open your live website at `https://[YOUR_VERCEL_DOMAIN]/#admin` and sign in using `admin@quizmania.org` and your password.
+
+---
+
+## 5. Environment Variables on Vercel
+
+Ensure these two variables are configured in Vercel (**Project Settings -> Environment Variables**):
 
 | Variable Name | Value | Purpose |
-|---|---|---|
-| `VITE_SUPABASE_URL` | `https://xyzcompany.supabase.co` | Supabase Cloud REST / Realtime endpoint |
-| `VITE_SUPABASE_ANON_KEY` | `eyJhbGciOi...` | Supabase Public / Publishable Anon Key |
+| :--- | :--- | :--- |
+| `VITE_SUPABASE_URL` | `https://ckxqkaawbntpaycagrlu.supabase.co` | Supabase Cloud API Gateway endpoint |
+| `VITE_SUPABASE_ANON_KEY` | `eyJhbGci...` (Your project's public anon key) | Client-safe API access token |
 
-5. Click **Deploy**. Vercel will build and output your production domain: `https://quizmania.vercel.app`.
+*(Remember: Never add `SUPABASE_SERVICE_ROLE_KEY` to Vercel client environment variables).*
 
 ---
 
-## 6. Step 5: Post-Deployment Smoke Test (12-Point Checklist)
+## 6. Table Editor Verification (Confirmation Checklist)
 
-Before competition day, complete this live verification checklist on the production URL:
+After executing the setup script, navigate to **Table Editor** in the Supabase Dashboard:
 
-- [ ] **1. Public Page Load:** Open `https://quizmania.vercel.app` on an Android phone and iPhone over 4G/Wi-Fi. Confirm load time < 1.5s.
-- [ ] **2. Single Page Routing:** Refresh `https://quizmania.vercel.app/#admin` and `https://quizmania.vercel.app/#leaderboard`. Confirm no 404 errors (handled by `vercel.json`).
-- [ ] **3. Candidate Registration:** Register a test student (Name, School, Class 11th). Check the Supabase **Table Editor** under `participants` to confirm the row was persisted in PostgreSQL.
-- [ ] **4. Duplicate Protection:** Attempt to register the exact same student twice. Confirm session restoration occurs cleanly.
-- [ ] **5. Zero Answer Exposure:** Open browser DevTools Network tab on the candidate device. Inspect `/rest/v1/v_client_questions` and confirm that `is_correct` and answer keys are nowhere in the response payload.
-- [ ] **6. Round 1 Launch:** From the Admin Console, initiate Round 1.
-- [ ] **7. Question Countdown:** Confirm the 20-second timer displays synchronized across phones.
-- [ ] **8. Answer Persistence:** Submit an option. Check the Supabase `submissions` table to confirm the record was stored.
-- [ ] **9. Refresh Resilience:** Reload the student's browser tab while answering. Confirm the session recovers the current question and remaining deadline.
-- [ ] **10. Deadline Enforcement:** Wait for 20 seconds to elapse. Confirm late submissions are rejected with `Deadline expired`.
-- [ ] **11. Results & Podium:** Complete both rounds, publish results from Admin, and inspect the Public Leaderboard.
-- [ ] **12. Projector Fullscreen:** Open `/leaderboard` on the auditorium laptop, press **Auditorium Projector Mode**, and confirm high contrast readability under hall lighting.
+- [ ] `competitions` — 1 row (`QUIZ-2026`, status `registration_open`).
+- [ ] `rounds` — 2 rows (`round-1` General Paper, `round-2` Subject Paper).
+- [ ] `questions` — 20 rows (10 for Round 1, 10 for Round 2).
+- [ ] `question_options` — 80 rows (4 options per question).
+- [ ] `participants` — Ready to receive candidate check-ins.
+- [ ] `submissions` — Ready to receive answer evaluations.
+- [ ] `exam_attempts` — Ready to track per-device attempt states.
+- [ ] `admin_roles` — 1 row containing your admin user.

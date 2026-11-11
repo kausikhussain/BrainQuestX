@@ -207,3 +207,4 @@ Before the live offline school competition begins:
 5. **Round 2 Qualification & Final Podium:**
    - Upon completion of Round 1, qualified students (&ge;60%) immediately unlock the Python Subject Paper.
    - At the conclusion of Round 2, the Admin can display the Public Leaderboard / Podium view on the auditorium screen.
+
