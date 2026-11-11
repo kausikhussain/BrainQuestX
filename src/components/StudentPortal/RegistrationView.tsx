@@ -364,9 +364,6 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({
                   )}
                 </button>
               </div>
-            </form>
-            )}
-          </div>
 
               <div className="text-center pt-2">
                 <p className="text-[11px] text-[#647084] flex items-center justify-center gap-1.5 font-medium">
@@ -376,7 +373,6 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({
               </div>
           </div>
         </div>
-
       </div>
   );
 };
