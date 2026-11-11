@@ -28,7 +28,10 @@ import {
   Copy,
   Check,
   Key,
-  RefreshCw
+  RefreshCw,
+  CirclePlay,
+  CirclePause,
+  Code2
 } from 'lucide-react';
 import { CompetitionState, Participant, LeaderboardEntry, StudentClass } from '../../types';
 import { CLIENT_QUESTIONS } from '../../data/questions';
@@ -260,6 +263,117 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     ? Math.round((leaderboard.reduce((acc, curr) => acc + curr.total_score, 0) / leaderboard.length) * 10) / 10
     : 0;
 
+  // Examination Round Controls State & Handlers
+  const [isRoundActionLoading, setIsRoundActionLoading] = useState<boolean>(false);
+  const [roundActionFeedback, setRoundActionFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const isRound2Unlocked = useMemo(() => {
+    return (
+      competitionState.current_round_number === 2 ||
+      qualifiedCount > 0 ||
+      competitionState.status === 'completed' ||
+      competitionState.status === 'results_published'
+    );
+  }, [competitionState.current_round_number, competitionState.status, qualifiedCount]);
+
+  const handleStartRound = async (roundNumber: 1 | 2) => {
+    const roundTitle = roundNumber === 1 ? 'Round 1 (General Paper)' : 'Round 2 (Python Subject Paper)';
+    const candidatesNote = roundNumber === 1 
+      ? `all ${totalRegistered} registered candidates`
+      : `all ${qualifiedCount} shortlisted candidates`;
+
+    const confirmed = window.confirm(
+      `Start ${roundTitle} for ${candidatesNote}?\n\nThis will synchronize competition state with Supabase and release Question 1 to all connected computers simultaneously.`
+    );
+    if (!confirmed) return;
+
+    setIsRoundActionLoading(true);
+    setRoundActionFeedback(null);
+    try {
+      await competitionService.startRound(roundNumber, adminToken || undefined);
+      setRoundActionFeedback({
+        message: `${roundTitle} successfully started! Live question released to candidates.`,
+        type: 'success',
+      });
+      refreshData();
+    } catch (err: any) {
+      setRoundActionFeedback({
+        message: err?.message || `Failed to start ${roundTitle}.`,
+        type: 'error',
+      });
+    } finally {
+      setIsRoundActionLoading(false);
+    }
+  };
+
+  const handlePauseRound = async () => {
+    const roundNum = competitionState.current_round_number || 1;
+    setIsRoundActionLoading(true);
+    setRoundActionFeedback(null);
+    try {
+      await competitionService.pauseRound(adminToken || undefined);
+      setRoundActionFeedback({
+        message: `Round ${roundNum} examination paused. Question timer halted.`,
+        type: 'success',
+      });
+      refreshData();
+    } catch (err: any) {
+      setRoundActionFeedback({
+        message: err?.message || 'Failed to pause examination.',
+        type: 'error',
+      });
+    } finally {
+      setIsRoundActionLoading(false);
+    }
+  };
+
+  const handleResumeRound = async () => {
+    const roundNum = competitionState.current_round_number || 1;
+    setIsRoundActionLoading(true);
+    setRoundActionFeedback(null);
+    try {
+      await competitionService.resumeRound(adminToken || undefined);
+      setRoundActionFeedback({
+        message: `Round ${roundNum} examination resumed. Countdown synchronized.`,
+        type: 'success',
+      });
+      refreshData();
+    } catch (err: any) {
+      setRoundActionFeedback({
+        message: err?.message || 'Failed to resume examination.',
+        type: 'error',
+      });
+    } finally {
+      setIsRoundActionLoading(false);
+    }
+  };
+
+  const handleEndRound = async (roundNumber: 1 | 2) => {
+    const roundTitle = roundNumber === 1 ? 'Round 1 (General Paper)' : 'Round 2 (Python Subject Paper)';
+    const confirmed = window.confirm(
+      `End ${roundTitle} for all candidates?\n\nThis will stop further submissions for this round and calculate candidate qualifications for Round 2.`
+    );
+    if (!confirmed) return;
+
+    setIsRoundActionLoading(true);
+    setRoundActionFeedback(null);
+    try {
+      await competitionService.endRound(roundNumber, adminToken || undefined);
+      setRoundActionFeedback({
+        message: `${roundTitle} ended successfully. Submissions locked.`,
+        type: 'success',
+      });
+      refreshData();
+    } catch (err: any) {
+      setRoundActionFeedback({
+        message: err?.message || `Failed to end ${roundTitle}.`,
+        type: 'error',
+      });
+    } finally {
+      setIsRoundActionLoading(false);
+    }
+  };
+
   // ==================== UNINITIALIZED / LOGIN STATE ====================
   if (!isAuthenticated) {
     return (
@@ -453,6 +567,360 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="text-[10px] font-bold uppercase tracking-wider text-[#647084] font-mono">Average Score</div>
           <div className="text-2xl font-black text-[#172033] font-mono mt-1">{avgScore}</div>
           <div className="text-[11px] text-[#8E9BAE] mt-0.5">Points per candidate</div>
+        </div>
+      </div>
+
+      {/* Feedback Banner for Round Controls */}
+      {roundActionFeedback && (
+        <div
+          className={`mb-6 p-4 rounded-2xl border text-xs font-semibold flex items-center justify-between shadow-soft-sm animate-fadeIn ${
+            roundActionFeedback.type === 'success'
+              ? 'bg-[#E8F5E9] border-[#C8E6C9] text-[#16845B]'
+              : 'bg-[#FEE2E2] border-[#FCA5A5] text-[#C2414A]'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {roundActionFeedback.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-[#16845B]" />
+            ) : (
+              <AlertCircle className="w-4 h-4 shrink-0 text-[#C2414A]" />
+            )}
+            <span>{roundActionFeedback.message}</span>
+          </div>
+          <button
+            onClick={() => setRoundActionFeedback(null)}
+            className="text-xs hover:underline font-bold cursor-pointer ml-4"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* EXAMINATION ROUND CONTROLS (LIVE ORCHESTRATION PANEL) */}
+      {/* ======================================================== */}
+      <div className="bg-white border border-[#E7EAF0] rounded-3xl p-6 sm:p-7 shadow-soft mb-8">
+        {/* Section Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-[#E7EAF0]">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="w-2 h-2 rounded-full bg-[#465FE5] animate-ping" />
+              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#465FE5] bg-[#E9EDFF] border border-[#C5D0FF] px-2.5 py-0.5 rounded-full">
+                Live Orchestration Engine
+              </span>
+            </div>
+            <h2 className="text-xl font-black text-[#172033] tracking-tight">
+              Examination Round Controls
+            </h2>
+            <p className="text-xs text-[#647084] mt-0.5">
+              Synchronize live examination lifecycle and push questions across all connected student workstations.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="px-3 py-1.5 rounded-xl bg-[#F8F9FC] border border-[#E7EAF0] text-xs font-mono font-bold text-[#172033] flex items-center gap-2">
+              <span className="text-[#647084]">Global State:</span>
+              <span className="px-2 py-0.5 rounded-md bg-white border border-[#E7EAF0] text-[#465FE5] uppercase text-[11px]">
+                {competitionState.status}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Round Cards Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+          
+          {/* ----------------- ROUND 1 CARD ----------------- */}
+          <div className={`p-6 rounded-2xl border transition-all ${
+            competitionState.status === 'in_progress' && competitionState.current_round_number === 1
+              ? 'bg-[#F4FDF7] border-[#A3E6B7] ring-2 ring-[#16845B]/20 shadow-soft-sm'
+              : 'bg-[#F8F9FC] border-[#E7EAF0]'
+          }`}>
+            {/* Card Header */}
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-[#E9EDFF] border border-[#C5D0FF] flex items-center justify-center text-[#465FE5] shrink-0">
+                  <Zap className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#465FE5]">
+                    CURRENT EXAMINATION
+                  </span>
+                  <h3 className="text-base font-black text-[#172033] tracking-tight">
+                    Round 1 — General Paper
+                  </h3>
+                </div>
+              </div>
+
+              {/* Status Badge */}
+              <div>
+                {competitionState.status === 'in_progress' && competitionState.current_round_number === 1 ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E8F5E9] text-[#16845B] border border-[#C8E6C9] text-xs font-bold font-mono">
+                    <span className="w-2 h-2 rounded-full bg-[#16845B] animate-pulse" />
+                    LIVE: IN PROGRESS
+                  </span>
+                ) : competitionState.status === 'registration_closed' && competitionState.current_round_number === 1 ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFFBEB] text-[#B7791F] border border-[#FDE68A] text-xs font-bold font-mono">
+                    <span className="w-2 h-2 rounded-full bg-[#B7791F]" />
+                    PAUSED
+                  </span>
+                ) : (competitionState.current_round_number === 2 || competitionState.status === 'completed' || competitionState.status === 'results_published' || leaderboard.some(e => e.round_1_score !== undefined && e.round_1_score > 0)) ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E9EDFF] text-[#465FE5] border border-[#C5D0FF] text-xs font-bold font-mono">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    CONCLUDED
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#F1F4F9] text-[#647084] border border-[#E7EAF0] text-xs font-bold font-mono">
+                    NOT STARTED
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Subtitle / Specs */}
+            <div className="text-xs text-[#647084] mb-5 font-medium flex items-center gap-2">
+              <Clock className="w-3.5 h-3.5 text-[#8E9BAE]" />
+              <span>10 Questions · 20 seconds each · 100 marks · Zero negative marking</span>
+            </div>
+
+            {/* Metrics Strip */}
+            <div className="grid grid-cols-3 gap-2 p-3 bg-white border border-[#E7EAF0] rounded-xl mb-5 text-center">
+              <div>
+                <span className="block text-[10px] uppercase font-bold text-[#8E9BAE] font-mono">Round Status</span>
+                <span className="text-xs font-extrabold text-[#172033] mt-0.5 block truncate">
+                  {competitionState.status === 'in_progress' && competitionState.current_round_number === 1
+                    ? 'In Progress'
+                    : competitionState.status === 'registration_closed' && competitionState.current_round_number === 1
+                    ? 'Paused'
+                    : (competitionState.current_round_number === 2 || competitionState.status === 'completed' || competitionState.status === 'results_published')
+                    ? 'Concluded'
+                    : 'Not Started'}
+                </span>
+              </div>
+              <div className="border-x border-[#E7EAF0]">
+                <span className="block text-[10px] uppercase font-bold text-[#8E9BAE] font-mono">Active Question</span>
+                <span className="text-xs font-extrabold text-[#465FE5] mt-0.5 block">
+                  {competitionState.status === 'in_progress' && competitionState.current_round_number === 1
+                    ? `Q${competitionState.current_question_number || 1} of 10`
+                    : '10 Qs Total'}
+                </span>
+              </div>
+              <div>
+                <span className="block text-[10px] uppercase font-bold text-[#8E9BAE] font-mono">Candidates</span>
+                <span className="text-xs font-extrabold text-[#16845B] mt-0.5 block font-mono">
+                  {totalRegistered} Enrolled
+                </span>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Start Round 1 Button */}
+              {!(competitionState.status === 'in_progress' && competitionState.current_round_number === 1) && (
+                <button
+                  onClick={() => handleStartRound(1)}
+                  disabled={isRoundActionLoading}
+                  className="px-5 py-2.5 rounded-xl font-bold text-xs bg-[#465FE5] hover:bg-[#384ECC] disabled:opacity-50 text-white shadow-soft transition-all flex items-center gap-2 cursor-pointer hover:-translate-y-0.5 active:translate-y-0"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>{isRoundActionLoading ? 'Starting...' : 'Start Round 1'}</span>
+                </button>
+              )}
+
+              {/* Pause / Resume Controls */}
+              {competitionState.status === 'in_progress' && competitionState.current_round_number === 1 && (
+                <button
+                  onClick={handlePauseRound}
+                  disabled={isRoundActionLoading}
+                  className="px-4 py-2.5 rounded-xl font-bold text-xs bg-[#FFFBEB] hover:bg-[#FEF3C7] text-[#B7791F] border border-[#FDE68A] shadow-soft transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <CirclePause className="w-3.5 h-3.5" />
+                  <span>Pause</span>
+                </button>
+              )}
+
+              {competitionState.status === 'registration_closed' && competitionState.current_round_number === 1 && (
+                <button
+                  onClick={handleResumeRound}
+                  disabled={isRoundActionLoading}
+                  className="px-4 py-2.5 rounded-xl font-bold text-xs bg-[#E8F5E9] hover:bg-[#C8E6C9] text-[#16845B] border border-[#C8E6C9] shadow-soft transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <CirclePlay className="w-3.5 h-3.5" />
+                  <span>Resume</span>
+                </button>
+              )}
+
+              {/* End Round 1 Button */}
+              {(competitionState.current_round_number === 1 && (competitionState.status === 'in_progress' || competitionState.status === 'registration_closed')) && (
+                <button
+                  onClick={() => handleEndRound(1)}
+                  disabled={isRoundActionLoading}
+                  className="px-4 py-2.5 rounded-xl font-bold text-xs bg-[#FEE2E2] hover:bg-[#FCA5A5] text-[#C2414A] border border-[#FCA5A5] shadow-soft transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>End Round 1</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* ----------------- ROUND 2 CARD ----------------- */}
+          <div className={`p-6 rounded-2xl border transition-all ${
+            competitionState.status === 'in_progress' && competitionState.current_round_number === 2
+              ? 'bg-[#F4FDF7] border-[#A3E6B7] ring-2 ring-[#16845B]/20 shadow-soft-sm'
+              : !isRound2Unlocked
+              ? 'bg-[#F8F9FC] border-[#E7EAF0] opacity-90'
+              : 'bg-white border-[#E7EAF0]'
+          }`}>
+            {/* Card Header */}
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div className="flex items-center gap-3">
+                <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
+                  isRound2Unlocked
+                    ? 'bg-[#E8F5E9] border border-[#C8E6C9] text-[#16845B]'
+                    : 'bg-[#F1F4F9] border border-[#E7EAF0] text-[#8E9BAE]'
+                }`}>
+                  <Code2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#16845B]">
+                    STAGE 2 / SUBJECT PAPER
+                  </span>
+                  <h3 className="text-base font-black text-[#172033] tracking-tight">
+                    Round 2 — Python Subject Paper
+                  </h3>
+                </div>
+              </div>
+
+              {/* Status Badge */}
+              <div>
+                {!isRound2Unlocked ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#F1F4F9] text-[#647084] border border-[#E7EAF0] text-xs font-bold font-mono">
+                    <Lock className="w-3 h-3 text-[#8E9BAE]" />
+                    LOCKED
+                  </span>
+                ) : competitionState.status === 'in_progress' && competitionState.current_round_number === 2 ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E8F5E9] text-[#16845B] border border-[#C8E6C9] text-xs font-bold font-mono">
+                    <span className="w-2 h-2 rounded-full bg-[#16845B] animate-pulse" />
+                    LIVE: IN PROGRESS
+                  </span>
+                ) : competitionState.status === 'registration_closed' && competitionState.current_round_number === 2 ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFFBEB] text-[#B7791F] border border-[#FDE68A] text-xs font-bold font-mono">
+                    <span className="w-2 h-2 rounded-full bg-[#B7791F]" />
+                    PAUSED
+                  </span>
+                ) : (competitionState.status === 'completed' || competitionState.status === 'results_published') ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E9EDFF] text-[#465FE5] border border-[#C5D0FF] text-xs font-bold font-mono">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    COMPLETED
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E8F5E9] text-[#16845B] border border-[#C8E6C9] text-xs font-bold font-mono">
+                    READY TO START
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Subtitle / Specs */}
+            <div className="text-xs text-[#647084] mb-5 font-medium flex items-center gap-2">
+              <Clock className="w-3.5 h-3.5 text-[#8E9BAE]" />
+              <span>10 Questions · 20 seconds each · 100 marks · Python Programming</span>
+            </div>
+
+            {/* Locked vs Unlocked View */}
+            {!isRound2Unlocked ? (
+              <div className="p-4 rounded-xl bg-[#F8F9FC] border border-dashed border-[#CBD5E1] text-xs text-[#647084] flex items-center gap-3">
+                <Lock className="w-5 h-5 text-[#8E9BAE] shrink-0" />
+                <span>
+                  <strong>Locked:</strong> Round 1 must finish and candidates meet the <strong className="text-[#172033]">&ge; {qualifyingScore}% cutoff</strong> before Round 2 can be initiated.
+                </span>
+              </div>
+            ) : (
+              <>
+                {/* Metrics Strip */}
+                <div className="grid grid-cols-3 gap-2 p-3 bg-white border border-[#E7EAF0] rounded-xl mb-5 text-center">
+                  <div>
+                    <span className="block text-[10px] uppercase font-bold text-[#8E9BAE] font-mono">Round Status</span>
+                    <span className="text-xs font-extrabold text-[#172033] mt-0.5 block truncate">
+                      {competitionState.status === 'in_progress' && competitionState.current_round_number === 2
+                        ? 'In Progress'
+                        : competitionState.status === 'registration_closed' && competitionState.current_round_number === 2
+                        ? 'Paused'
+                        : (competitionState.status === 'completed' || competitionState.status === 'results_published')
+                        ? 'Completed'
+                        : 'Ready to Start'}
+                    </span>
+                  </div>
+                  <div className="border-x border-[#E7EAF0]">
+                    <span className="block text-[10px] uppercase font-bold text-[#8E9BAE] font-mono">Active Question</span>
+                    <span className="text-xs font-extrabold text-[#465FE5] mt-0.5 block">
+                      {competitionState.status === 'in_progress' && competitionState.current_round_number === 2
+                        ? `Q${competitionState.current_question_number || 1} of 10`
+                        : '10 Qs Total'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] uppercase font-bold text-[#8E9BAE] font-mono">Shortlisted</span>
+                    <span className="text-xs font-extrabold text-[#16845B] mt-0.5 block font-mono">
+                      {qualifiedCount} Candidates
+                    </span>
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* Start Round 2 Button */}
+                  {!(competitionState.status === 'in_progress' && competitionState.current_round_number === 2) && !(competitionState.status === 'completed' || competitionState.status === 'results_published') && (
+                    <button
+                      onClick={() => handleStartRound(2)}
+                      disabled={isRoundActionLoading || qualifiedCount === 0}
+                      className="px-5 py-2.5 rounded-xl font-bold text-xs bg-[#16845B] hover:bg-[#116947] disabled:opacity-50 text-white shadow-soft transition-all flex items-center gap-2 cursor-pointer hover:-translate-y-0.5 active:translate-y-0"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>{isRoundActionLoading ? 'Starting...' : 'Start Round 2'}</span>
+                    </button>
+                  )}
+
+                  {/* Pause / Resume Controls */}
+                  {competitionState.status === 'in_progress' && competitionState.current_round_number === 2 && (
+                    <button
+                      onClick={handlePauseRound}
+                      disabled={isRoundActionLoading}
+                      className="px-4 py-2.5 rounded-xl font-bold text-xs bg-[#FFFBEB] hover:bg-[#FEF3C7] text-[#B7791F] border border-[#FDE68A] shadow-soft transition-all flex items-center gap-2 cursor-pointer"
+                    >
+                      <CirclePause className="w-3.5 h-3.5" />
+                      <span>Pause</span>
+                    </button>
+                  )}
+
+                  {competitionState.status === 'registration_closed' && competitionState.current_round_number === 2 && (
+                    <button
+                      onClick={handleResumeRound}
+                      disabled={isRoundActionLoading}
+                      className="px-4 py-2.5 rounded-xl font-bold text-xs bg-[#E8F5E9] hover:bg-[#C8E6C9] text-[#16845B] border border-[#C8E6C9] shadow-soft transition-all flex items-center gap-2 cursor-pointer"
+                    >
+                      <CirclePlay className="w-3.5 h-3.5" />
+                      <span>Resume</span>
+                    </button>
+                  )}
+
+                  {/* End Round 2 Button */}
+                  {(competitionState.current_round_number === 2 && (competitionState.status === 'in_progress' || competitionState.status === 'registration_closed')) && (
+                    <button
+                      onClick={() => handleEndRound(2)}
+                      disabled={isRoundActionLoading}
+                      className="px-4 py-2.5 rounded-xl font-bold text-xs bg-[#FEE2E2] hover:bg-[#FCA5A5] text-[#C2414A] border border-[#FCA5A5] shadow-soft transition-all flex items-center gap-2 cursor-pointer"
+                    >
+                      <Square className="w-3.5 h-3.5 fill-current" />
+                      <span>End Round 2</span>
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
         </div>
       </div>
 

@@ -1772,7 +1772,7 @@ class CompetitionService {
     this.notifyListeners();
   }
 
-  public async startRound(roundNumber: 1 | 2) {
+  public async startRound(roundNumber: 1 | 2, adminToken?: string) {
     const roundQuestions = CLIENT_QUESTIONS.filter((q) => q.roundNumber === roundNumber);
     if (roundQuestions.length === 0) return;
 
@@ -1794,17 +1794,83 @@ class CompetitionService {
     this.persistLocal();
     this.notifyListeners();
     this.scheduleAutoAdvance(durationSeconds);
+    this.logAdminAction('START_ROUND', 'admin', { roundNumber });
 
+    const token = adminToken || this.getActiveAdminToken();
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        const { data, error } = await supabase.rpc('admin_update_competition_state', {
+          p_status: 'in_progress',
+          p_round_number: roundNumber,
+          p_cutoff: this.localState.round_1_qualifying_score || 60,
+          p_admin_token: token,
+        });
+        if (error) {
+          console.warn('[Admin Controls] admin_update_competition_state error:', error.message);
+        }
+      } catch (err) {
+        console.warn('Error syncing startRound to Supabase:', err);
+      }
+    }
+  }
+
+  public async pauseRound(adminToken?: string) {
+    this.clearAutoAdvance();
+    const currentRound = this.localState.current_round_number || 1;
+
+    this.localState = {
+      ...this.localState,
+      status: 'registration_closed',
+    };
+
+    this.persistLocal();
+    this.notifyListeners();
+    this.logAdminAction('PAUSE_ROUND', 'admin', { roundNumber: currentRound });
+
+    const token = adminToken || this.getActiveAdminToken();
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        await supabase.rpc('admin_update_competition_state', {
+          p_status: 'registration_closed',
+          p_round_number: currentRound,
+          p_cutoff: this.localState.round_1_qualifying_score || 60,
+          p_admin_token: token,
+        });
+      } catch (err) {
+        console.warn('Error syncing pauseRound to Supabase:', err);
+      }
+    }
+  }
+
+  public async resumeRound(adminToken?: string) {
+    const roundNumber = (this.localState.current_round_number as 1 | 2) || 1;
+    const durationSeconds = this.localState.duration_per_question || 20;
+    const now = Date.now();
+    const deadline = now + durationSeconds * 1000;
+
+    this.localState = {
+      ...this.localState,
+      status: 'in_progress',
+      question_start_time: new Date(now).toISOString(),
+      question_deadline: new Date(deadline).toISOString(),
+    };
+
+    this.persistLocal();
+    this.notifyListeners();
+    this.scheduleAutoAdvance(durationSeconds);
+    this.logAdminAction('RESUME_ROUND', 'admin', { roundNumber });
+
+    const token = adminToken || this.getActiveAdminToken();
     if (isSupabaseConfigured() && supabase) {
       try {
         await supabase.rpc('admin_update_competition_state', {
           p_status: 'in_progress',
           p_round_number: roundNumber,
           p_cutoff: this.localState.round_1_qualifying_score || 60,
-          p_admin_token: this.getActiveAdminToken(),
+          p_admin_token: token,
         });
       } catch (err) {
-        console.warn('Error syncing startRound to Supabase:', err);
+        console.warn('Error syncing resumeRound to Supabase:', err);
       }
     }
   }
@@ -1867,13 +1933,14 @@ class CompetitionService {
     }
   }
 
-  public endRound() {
+  public async endRound(roundNumber?: 1 | 2, adminToken?: string) {
     this.clearAutoAdvance();
-    const currentRound = this.localState.current_round_number;
+    const currentRound = roundNumber || this.localState.current_round_number;
+    const newStatus: CompetitionStatus = currentRound === 2 ? 'completed' : 'registration_closed';
 
     this.localState = {
       ...this.localState,
-      status: currentRound === 2 ? 'completed' : 'upcoming',
+      status: newStatus,
       current_question_id: null,
       question_start_time: null,
       question_deadline: null,
@@ -1881,6 +1948,21 @@ class CompetitionService {
 
     this.persistLocal();
     this.notifyListeners();
+    this.logAdminAction('END_ROUND', 'admin', { roundNumber: currentRound });
+
+    const token = adminToken || this.getActiveAdminToken();
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        await supabase.rpc('admin_update_competition_state', {
+          p_status: newStatus,
+          p_round_number: currentRound,
+          p_cutoff: this.localState.round_1_qualifying_score || 60,
+          p_admin_token: token,
+        });
+      } catch (err) {
+        console.warn('Error syncing endRound to Supabase:', err);
+      }
+    }
   }
 
   public publishResults() {
