@@ -24,7 +24,11 @@ import {
   FileCheck,
   ShieldCheck,
   LogOut,
-  Zap
+  Zap,
+  Copy,
+  Check,
+  Key,
+  RefreshCw
 } from 'lucide-react';
 import { CompetitionState, Participant, LeaderboardEntry, StudentClass } from '../../types';
 import { CLIENT_QUESTIONS } from '../../data/questions';
@@ -66,6 +70,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSchool, setSelectedSchool] = useState<string>('all');
   const [selectedClass, setSelectedClass] = useState<string>('all');
+
+  // Tab state: 'students' (student access management) vs 'leaderboard' (exam standings)
+  const [activeTab, setActiveTab] = useState<'students' | 'leaderboard'>('students');
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [regSuccessMsg, setRegSuccessMsg] = useState<string | null>(null);
 
   // Qualification cutoff state
   const [qualifyingScore, setQualifyingScore] = useState<number>(() => {
@@ -189,6 +199,57 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return matchesSearch && matchesSchool && matchesClass;
     });
   }, [leaderboard, searchQuery, selectedSchool, selectedClass]);
+
+  // Copy access code to clipboard with visual feedback
+  const handleCopyCode = (code: string) => {
+    if (!code) return;
+    try {
+      navigator.clipboard.writeText(code);
+      setCopiedCode(code);
+      setTimeout(() => setCopiedCode(null), 2000);
+    } catch {
+      // Fallback
+    }
+  };
+
+  // Securely regenerate student access code preserving exam progress
+  const handleRegenerateAccessCode = async (participantId: string, studentName: string) => {
+    const confirmed = window.confirm(
+      `Regenerate a new Access Code for ${studentName}?\n\nThis will invalidate their previous code while keeping their registered profile, answers, and score completely intact.`
+    );
+    if (!confirmed) return;
+
+    setRegeneratingId(participantId);
+    setRegSuccessMsg(null);
+    try {
+      const res = await competitionService.regenerateStudentAccessCode(participantId, adminToken || undefined);
+      if (res.success && res.access_code) {
+        setRegSuccessMsg(`New Access Code for ${studentName} generated: ${res.access_code}`);
+        refreshData();
+      } else {
+        alert(res.error || 'Failed to regenerate access code.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'An error occurred during access code regeneration.');
+    } finally {
+      setRegeneratingId(null);
+    }
+  };
+
+  // Filtered registered students table
+  const filteredParticipants = useMemo(() => {
+    return participants.filter((p) => {
+      const q = searchQuery.trim().toLowerCase();
+      const matchesSearch =
+        !q ||
+        p.student_name.toLowerCase().includes(q) ||
+        p.school_name.toLowerCase().includes(q) ||
+        (p.access_code && p.access_code.toLowerCase().includes(q));
+      const matchesSchool = selectedSchool === 'all' || p.school_name === selectedSchool;
+      const matchesClass = selectedClass === 'all' || p.student_class === selectedClass;
+      return matchesSearch && matchesSchool && matchesClass;
+    });
+  }, [participants, searchQuery, selectedSchool, selectedClass]);
 
   // Aggregate Metrics
   const totalRegistered = participants.length;
@@ -464,18 +525,62 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </div>
 
+      {/* Notification Banner for Regenerated Access Code */}
+      {regSuccessMsg && (
+        <div className="p-4 rounded-2xl bg-[#E8F5E9] border border-[#C8E6C9] text-xs text-[#16845B] font-semibold flex items-center justify-between animate-fadeIn shadow-soft-sm">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-[#16845B]" />
+            <span>{regSuccessMsg}</span>
+          </div>
+          <button
+            onClick={() => setRegSuccessMsg(null)}
+            className="text-xs text-[#16845B] hover:underline font-bold cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Candidate Records Table Card */}
       <div className="bg-white border border-[#E7EAF0] rounded-3xl shadow-soft overflow-hidden">
         
-        {/* Table Filter Toolbar */}
+        {/* Table Header & Mode Switcher */}
         <div className="p-5 border-b border-[#E7EAF0] flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <h2 className="text-base font-bold text-[#172033]">
-              Candidate Examination Roster
-            </h2>
-            <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded-md bg-[#F1F4F9] text-[#647084]">
-              {filteredLeaderboard.length} Candidates
-            </span>
+          <div className="flex items-center gap-3">
+            {/* View Switcher Tabs */}
+            <div className="flex items-center bg-[#F1F4F9] p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setActiveTab('students')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeTab === 'students'
+                    ? 'bg-white text-[#465FE5] shadow-soft-sm'
+                    : 'text-[#647084] hover:text-[#172033]'
+                }`}
+              >
+                <Key className="w-3.5 h-3.5" />
+                <span>Student Access Codes</span>
+                <span className="font-mono text-[10px] px-1.5 py-0.2 rounded-md bg-[#E9EDFF] text-[#465FE5]">
+                  {filteredParticipants.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('leaderboard')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeTab === 'leaderboard'
+                    ? 'bg-white text-[#465FE5] shadow-soft-sm'
+                    : 'text-[#647084] hover:text-[#172033]'
+                }`}
+              >
+                <Trophy className="w-3.5 h-3.5" />
+                <span>Standings & Scoring</span>
+                <span className="font-mono text-[10px] px-1.5 py-0.2 rounded-md bg-[#F1F4F9] text-[#647084]">
+                  {filteredLeaderboard.length}
+                </span>
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
@@ -484,7 +589,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#8E9BAE]" />
               <input
                 type="text"
-                placeholder="Search candidates..."
+                placeholder="Search candidates or code..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-8 pr-3 py-1.5 rounded-xl border border-[#E7EAF0] text-xs text-[#172033] placeholder-[#8E9BAE] focus:outline-none focus:ring-1 focus:ring-[#465FE5]"
@@ -516,100 +621,224 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* Candidate Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-[#F8F9FC] text-[10px] uppercase font-bold text-[#647084] border-b border-[#E7EAF0] font-mono tracking-wider">
-              <tr>
-                <th className="py-3 px-4 sm:px-6">Candidate</th>
-                <th className="py-3 px-4">School</th>
-                <th className="py-3 px-4 text-center">Class</th>
-                <th className="py-3 px-4 text-center">R1 Score</th>
-                <th className="py-3 px-4 text-center">R2 Score</th>
-                <th className="py-3 px-4 text-center">Total Points</th>
-                <th className="py-3 px-4 text-center">Fullscreen Exits</th>
-                <th className="py-3 px-4 sm:px-6 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#E7EAF0]">
-              {filteredLeaderboard.length > 0 ? (
-                filteredLeaderboard.map((entry) => {
-                  const totalExits = competitionService.getParticipantFullscreenExitCount(entry.participant_id);
-
-                  return (
-                    <tr key={entry.participant_id} className="hover:bg-[#F8F9FC] transition-colors">
-                      <td className="py-3.5 px-4 sm:px-6">
-                        <div className="font-bold text-[#172033]">
-                          {entry.student_name}
-                        </div>
-                        <div className="text-[11px] text-[#8E9BAE] font-mono">
-                          ID: {entry.participant_id.slice(0, 8)}
-                        </div>
-                      </td>
-
-                      <td className="py-3.5 px-4 text-xs text-[#647084] font-medium">
-                        {entry.school_name}
-                      </td>
-
-                      <td className="py-3.5 px-4 text-center">
-                        <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded-md bg-[#F1F4F9] text-[#465FE5]">
-                          {entry.student_class || '11th'}
-                        </span>
-                      </td>
-
-                      <td className="py-3.5 px-4 text-center font-mono font-bold text-[#172033]">
-                        {entry.round_1_score !== undefined ? `${entry.round_1_score}` : '-'}
-                      </td>
-
-                      <td className="py-3.5 px-4 text-center font-mono font-bold text-[#172033]">
-                        {entry.round_2_score !== undefined ? `${entry.round_2_score}` : '-'}
-                      </td>
-
-                      <td className="py-3.5 px-4 text-center font-mono font-black text-[#465FE5]">
-                        {entry.total_score}
-                      </td>
-
-                      {/* Fullscreen Exits Telemetry */}
-                      <td className="py-3.5 px-4 text-center">
-                        {totalExits > 0 ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#FEF3C7] text-[#B7791F] border border-[#FDE68A] font-mono">
-                            <ShieldAlert className="w-3 h-3" />
-                            {totalExits} Exits
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-[#E8F5E9] text-[#16845B] border border-[#C8E6C9] font-mono">
-                            <CheckCircle2 className="w-3 h-3" />
-                            0 Exits
-                          </span>
-                        )}
-                      </td>
-
-                      {/* Action: Audit Details Modal */}
-                      <td className="py-3.5 px-4 sm:px-6 text-right">
-                        <button
-                          onClick={() => {
-                            setAuditParticipantId(entry.participant_id);
-                            setAuditStudentName(entry.student_name);
-                          }}
-                          className="px-3 py-1.5 rounded-lg border border-[#E7EAF0] text-xs font-bold text-[#465FE5] hover:bg-[#E9EDFF] transition-colors inline-flex items-center gap-1 cursor-pointer"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          <span>Audit</span>
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              ) : (
+        {/* Tab 1: Student Access Codes & Profile Management */}
+        {activeTab === 'students' ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-[#F8F9FC] text-[10px] uppercase font-bold text-[#647084] border-b border-[#E7EAF0] font-mono tracking-wider">
                 <tr>
-                  <td colSpan={8} className="py-10 text-center text-[#8E9BAE] text-xs">
-                    No candidate records match the active search and filter criteria.
-                  </td>
+                  <th className="py-3 px-4 sm:px-6">Student Name</th>
+                  <th className="py-3 px-4">School</th>
+                  <th className="py-3 px-4 text-center">Class</th>
+                  <th className="py-3 px-4">Registration Date</th>
+                  <th className="py-3 px-4">Access Code</th>
+                  <th className="py-3 px-4 text-center">Participation Status</th>
+                  <th className="py-3 px-4 sm:px-6 text-right">Actions</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-[#E7EAF0]">
+                {filteredParticipants.length > 0 ? (
+                  filteredParticipants.map((p) => {
+                    return (
+                      <tr key={p.id} className="hover:bg-[#F8F9FC] transition-colors">
+                        <td className="py-3.5 px-4 sm:px-6">
+                          <div className="font-bold text-[#172033]">
+                            {p.student_name}
+                          </div>
+                          <div className="text-[11px] text-[#8E9BAE] font-mono">
+                            ID: {p.id.slice(0, 8)}
+                          </div>
+                        </td>
+
+                        <td className="py-3.5 px-4 text-xs text-[#647084] font-medium">
+                          {p.school_name}
+                        </td>
+
+                        <td className="py-3.5 px-4 text-center">
+                          <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded-md bg-[#F1F4F9] text-[#465FE5]">
+                            {p.student_class}
+                          </span>
+                        </td>
+
+                        <td className="py-3.5 px-4 text-xs text-[#647084] font-mono">
+                          {p.created_at ? new Date(p.created_at).toLocaleString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          }) : 'Just now'}
+                        </td>
+
+                        {/* Access Code Badge with Copy button */}
+                        <td className="py-3.5 px-4">
+                          <div className="inline-flex items-center gap-1.5 bg-[#E9EDFF] border border-[#C5D2FB] px-2.5 py-1 rounded-lg">
+                            <span className="font-mono font-black text-xs text-[#465FE5] tracking-wider select-all">
+                              {p.access_code}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyCode(p.access_code)}
+                              title="Copy Access Code"
+                              className="p-1 text-[#465FE5] hover:text-[#384EC9] transition-colors rounded cursor-pointer"
+                            >
+                              {copiedCode === p.access_code ? (
+                                <Check className="w-3.5 h-3.5 text-[#16845B]" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          </div>
+                        </td>
+
+                        {/* Participation Status */}
+                        <td className="py-3.5 px-4 text-center">
+                          <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full font-mono ${
+                            p.status?.includes('Completed') || p.status?.includes('Qualified')
+                              ? 'bg-[#E8F5E9] text-[#16845B] border border-[#C8E6C9]'
+                              : p.status?.includes('In Progress')
+                              ? 'bg-[#FEF3C7] text-[#B7791F] border border-[#FDE68A]'
+                              : 'bg-[#F1F4F9] text-[#647084] border border-[#E7EAF0]'
+                          }`}>
+                            {p.status || 'Registered'}
+                          </span>
+                        </td>
+
+                        {/* Actions */}
+                        <td className="py-3.5 px-4 sm:px-6 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleRegenerateAccessCode(p.id, p.student_name)}
+                              disabled={regeneratingId === p.id}
+                              title="Regenerate new Access Code for this student"
+                              className="px-2.5 py-1.5 rounded-lg border border-[#E7EAF0] text-xs font-bold text-[#B7791F] hover:bg-[#FEF3C7] transition-colors inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${regeneratingId === p.id ? 'animate-spin' : ''}`} />
+                              <span>{regeneratingId === p.id ? 'Regenerating...' : 'Regenerate Code'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAuditParticipantId(p.id);
+                                setAuditStudentName(p.student_name);
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg border border-[#E7EAF0] text-xs font-bold text-[#465FE5] hover:bg-[#E9EDFF] transition-colors inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Audit</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={7} className="py-10 text-center text-[#8E9BAE] text-xs">
+                      No registered candidates match the active search and filter criteria.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          /* Tab 2: Standings & Scoring Roster */
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-[#F8F9FC] text-[10px] uppercase font-bold text-[#647084] border-b border-[#E7EAF0] font-mono tracking-wider">
+                <tr>
+                  <th className="py-3 px-4 sm:px-6">Candidate</th>
+                  <th className="py-3 px-4">School</th>
+                  <th className="py-3 px-4 text-center">Class</th>
+                  <th className="py-3 px-4 text-center">R1 Score</th>
+                  <th className="py-3 px-4 text-center">R2 Score</th>
+                  <th className="py-3 px-4 text-center">Total Points</th>
+                  <th className="py-3 px-4 text-center">Fullscreen Exits</th>
+                  <th className="py-3 px-4 sm:px-6 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#E7EAF0]">
+                {filteredLeaderboard.length > 0 ? (
+                  filteredLeaderboard.map((entry) => {
+                    const totalExits = competitionService.getParticipantFullscreenExitCount(entry.participant_id);
+
+                    return (
+                      <tr key={entry.participant_id} className="hover:bg-[#F8F9FC] transition-colors">
+                        <td className="py-3.5 px-4 sm:px-6">
+                          <div className="font-bold text-[#172033]">
+                            {entry.student_name}
+                          </div>
+                          <div className="text-[11px] text-[#8E9BAE] font-mono">
+                            ID: {entry.participant_id.slice(0, 8)}
+                          </div>
+                        </td>
+
+                        <td className="py-3.5 px-4 text-xs text-[#647084] font-medium">
+                          {entry.school_name}
+                        </td>
+
+                        <td className="py-3.5 px-4 text-center">
+                          <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded-md bg-[#F1F4F9] text-[#465FE5]">
+                            {entry.student_class || '11th'}
+                          </span>
+                        </td>
+
+                        <td className="py-3.5 px-4 text-center font-mono font-bold text-[#172033]">
+                          {entry.round_1_score !== undefined ? `${entry.round_1_score}` : '-'}
+                        </td>
+
+                        <td className="py-3.5 px-4 text-center font-mono font-bold text-[#172033]">
+                          {entry.round_2_score !== undefined ? `${entry.round_2_score}` : '-'}
+                        </td>
+
+                        <td className="py-3.5 px-4 text-center font-mono font-black text-[#465FE5]">
+                          {entry.total_score}
+                        </td>
+
+                        {/* Fullscreen Exits Telemetry */}
+                        <td className="py-3.5 px-4 text-center">
+                          {totalExits > 0 ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#FEF3C7] text-[#B7791F] border border-[#FDE68A] font-mono">
+                              <ShieldAlert className="w-3 h-3" />
+                              {totalExits} Exits
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-[#E8F5E9] text-[#16845B] border border-[#C8E6C9] font-mono">
+                              <CheckCircle2 className="w-3 h-3" />
+                              0 Exits
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Action: Audit Details Modal */}
+                        <td className="py-3.5 px-4 sm:px-6 text-right">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAuditParticipantId(entry.participant_id);
+                              setAuditStudentName(entry.student_name);
+                            }}
+                            className="px-3 py-1.5 rounded-lg border border-[#E7EAF0] text-xs font-bold text-[#465FE5] hover:bg-[#E9EDFF] transition-colors inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Audit</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={8} className="py-10 text-center text-[#8E9BAE] text-xs">
+                      No candidate records match the active search and filter criteria.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Audit Modal */}

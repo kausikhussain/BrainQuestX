@@ -1421,6 +1421,10 @@ BEGIN
 END;
 $$;
 
+-- Drop all overloads to prevent HTTP 300 Multiple Choices in PostgREST
+DROP FUNCTION IF EXISTS public.admin_get_participants();
+DROP FUNCTION IF EXISTS public.admin_get_participants(TEXT);
+
 -- Admin Get All Participants RPC (Real-Time Student Check-in for Organizer Dashboard)
 CREATE OR REPLACE FUNCTION public.admin_get_participants(
     p_admin_token TEXT DEFAULT NULL
@@ -1460,13 +1464,90 @@ BEGIN
             'student_name', p.student_name,
             'school_name', p.school_name,
             'student_class', p.student_class,
-            'created_at', p.created_at
+            'is_active', p.is_active,
+            'created_at', p.created_at,
+            'last_ping_at', p.last_ping_at,
+            'round_1_submitted', COALESCE(ea1.is_submitted, false),
+            'round_1_score', COALESCE(ea1.score, 0),
+            'round_2_submitted', COALESCE(ea2.is_submitted, false),
+            'round_2_score', COALESCE(ea2.score, 0),
+            'is_qualified', COALESCE(ea1.is_qualified, false),
+            'status', CASE 
+                WHEN ea2.is_submitted THEN 'Round 2 Completed'
+                WHEN ea2.id IS NOT NULL THEN 'Round 2 In Progress'
+                WHEN ea1.is_submitted AND ea1.is_qualified THEN 'Qualified for Round 2'
+                WHEN ea1.is_submitted AND NOT ea1.is_qualified THEN 'Round 1 Completed'
+                WHEN ea1.id IS NOT NULL THEN 'Round 1 In Progress'
+                ELSE 'Registered'
+            END
         ) ORDER BY p.created_at ASC
     ), '[]'::jsonb)
     INTO v_result
-    FROM public.participants p;
+    FROM public.participants p
+    LEFT JOIN public.exam_attempts ea1 ON ea1.participant_id = p.id AND ea1.round_number = 1
+    LEFT JOIN public.exam_attempts ea2 ON ea2.participant_id = p.id AND ea2.round_number = 2;
 
     RETURN v_result;
+END;
+$$;
+
+-- Administrator-Only Student Access Code Regeneration
+CREATE OR REPLACE FUNCTION public.admin_regenerate_student_access_code(
+    p_participant_id UUID,
+    p_admin_token TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, extensions, pg_temp
+AS $$
+DECLARE
+    v_is_authorized BOOLEAN := false;
+    v_participant RECORD;
+    v_new_code TEXT;
+    v_new_token TEXT;
+BEGIN
+    -- Check admin token authorization
+    IF p_admin_token IS NOT NULL AND trim(p_admin_token) <> '' THEN
+        IF EXISTS (SELECT 1 FROM public.admin_users WHERE session_token = trim(p_admin_token) AND token_expires_at > clock_timestamp()) THEN
+            v_is_authorized := true;
+        END IF;
+    END IF;
+
+    -- Check Supabase Auth uid authorization
+    IF NOT v_is_authorized AND auth.uid() IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM public.admin_roles WHERE user_id = auth.uid()) THEN
+            v_is_authorized := true;
+        END IF;
+    END IF;
+
+    IF NOT v_is_authorized THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Unauthorized: Valid administrator session required.');
+    END IF;
+
+    SELECT * INTO v_participant FROM public.participants WHERE id = p_participant_id;
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Participant not found.');
+    END IF;
+
+    -- Generate new cryptographically random access code and session token
+    v_new_code := 'QZ-' || upper(substr(encode(extensions.gen_random_bytes(3), 'hex'), 1, 6));
+    v_new_token := encode(extensions.gen_random_bytes(32), 'hex');
+
+    -- Update participant credentials safely preserving ID, registration, exam attempts, and submissions
+    UPDATE public.participants
+    SET access_code = v_new_code,
+        session_token = v_new_token,
+        last_ping_at = clock_timestamp()
+    WHERE id = p_participant_id;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'participant_id', p_participant_id,
+        'student_name', v_participant.student_name,
+        'access_code', v_new_code,
+        'session_token', v_new_token
+    );
 END;
 $$;
 
@@ -1488,3 +1569,4 @@ GRANT EXECUTE ON FUNCTION public.admin_logout_rpc(TEXT) TO anon, authenticated, 
 GRANT EXECUTE ON FUNCTION public.admin_update_competition_state(TEXT, INT, INT, TEXT) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.get_competition_state_rpc() TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.admin_get_participants(TEXT) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.admin_regenerate_student_access_code(UUID, TEXT) TO anon, authenticated, service_role;

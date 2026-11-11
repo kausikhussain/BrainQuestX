@@ -129,6 +129,8 @@ assert(adminLoginMatch[0].includes('extensions'), 'admin_login_rpc includes exte
 assert(sqlContent.includes('FUNCTION public.verify_admin_session_rpc'), 'verify_admin_session_rpc RPC defined');
 assert(sqlContent.includes('FUNCTION public.admin_logout_rpc'), 'admin_logout_rpc RPC defined');
 assert(sqlContent.includes('p_admin_token TEXT DEFAULT NULL'), 'Admin protected RPCs accept p_admin_token');
+assert(sqlContent.includes('DROP FUNCTION IF EXISTS public.admin_get_participants();'), 'admin_get_participants drops old 0-param overload to resolve HTTP 300');
+assert(sqlContent.includes('FUNCTION public.admin_regenerate_student_access_code'), 'admin_regenerate_student_access_code RPC defined');
 
 console.log('\n[SECTION 2] Auditing Frontend TypeScript Client Contracts...');
 

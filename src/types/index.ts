@@ -17,6 +17,10 @@ export interface Participant {
   school_name: string;
   student_class: StudentClass;
   is_active: boolean;
+  status?: string;
+  round_1_score?: number;
+  round_2_score?: number;
+  is_qualified?: boolean;
   last_ping_at: string;
   created_at: string;
 }
