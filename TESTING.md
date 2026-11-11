@@ -42,3 +42,4 @@ npm run test:concurrency
 | **TC-05: Auto-Progression** | Auto-advance triggers after 20.3s | Orchestration timer test | PASS |
 | **TC-06: CSV Export** | Results exported with accurate score and time records | Integration test | PASS |
 | **TC-07: Destructive Reset Confirmation** | Requires typing "RESET COMPETITION" | UI modal verification | PASS |
+

@@ -54,3 +54,4 @@ Never deploy or run on competition day without a prior rehearsal. Follow this ch
   - Close registration.
   - Click **Start Round 1**.
   - Review live submissions progress bar as each question elapses.
+

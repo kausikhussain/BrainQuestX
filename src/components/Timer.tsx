@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Clock, AlertTriangle } from 'lucide-react';
 import { competitionService } from '../services/competitionService';
+import { sound } from '../utils/audio';
 
 interface TimerProps {
   deadline: string | null;
@@ -18,12 +19,14 @@ export const Timer: React.FC<TimerProps> = ({
   const [secondsRemaining, setSecondsRemaining] = useState<number>(totalDurationSeconds);
   const [fractionRemaining, setFractionRemaining] = useState<number>(1);
   const [hasExpired, setHasExpired] = useState<boolean>(false);
+  const lastTickedSecondRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!deadline) {
       setSecondsRemaining(totalDurationSeconds);
       setFractionRemaining(1);
       setHasExpired(false);
+      lastTickedSecondRef.current = null;
       return;
     }
 
@@ -40,9 +43,10 @@ export const Timer: React.FC<TimerProps> = ({
         setFractionRemaining(0);
         setHasExpired(true);
 
-        if (!expiredTriggered && onExpire) {
+        if (!expiredTriggered) {
           expiredTriggered = true;
-          onExpire();
+          sound.playTimeExpired();
+          if (onExpire) onExpire();
         }
         return;
       }
@@ -50,6 +54,12 @@ export const Timer: React.FC<TimerProps> = ({
       const totalMs = totalDurationSeconds * 1000;
       const fraction = Math.max(0, Math.min(1, diffMs / totalMs));
       const secs = Math.ceil(diffMs / 1000);
+
+      // Audio cue during critical 3s
+      if (secs <= 3 && secs > 0 && lastTickedSecondRef.current !== secs && !isLocked) {
+        lastTickedSecondRef.current = secs;
+        sound.playTick(true);
+      }
 
       setSecondsRemaining(secs);
       setFractionRemaining(fraction);
@@ -64,12 +74,9 @@ export const Timer: React.FC<TimerProps> = ({
         cancelAnimationFrame(animationFrameId);
       }
     };
-  }, [deadline, totalDurationSeconds, onExpire]);
+  }, [deadline, totalDurationSeconds, onExpire, isLocked]);
 
-  // Visual phases:
-  // Normal: > 5s
-  // Warning: 4s - 5s
-  // Critical: <= 3s
+  // Visual phases
   const isCritical = secondsRemaining <= 3 && secondsRemaining > 0;
   const isWarning = secondsRemaining <= 5 && secondsRemaining > 3;
 

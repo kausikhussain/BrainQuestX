@@ -95,3 +95,4 @@ Ranks are computed strictly without human bias using the following cascade:
 - **Correct Answer Secrecy:** Public queries utilize the view `v_client_questions` which strips `is_correct` and answer keys.
 - **Submission Idempotency:** The database enforces a `UNIQUE(question_id, participant_id)` constraint. Attempting to submit twice returns `{ already_submitted: true }` and does not mutate records.
 - **Admin Passkey Gate:** The administrator panel requires administrative authorization before destructive actions or state transitions can be initiated.
+

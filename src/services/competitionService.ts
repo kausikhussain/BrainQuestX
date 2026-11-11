@@ -767,3 +767,4 @@ class CompetitionService {
 }
 
 export const competitionService = new CompetitionService();
+

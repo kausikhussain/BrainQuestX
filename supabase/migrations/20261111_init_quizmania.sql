@@ -388,3 +388,4 @@ AS $$
     FROM participant_scores
     ORDER BY rank ASC, student_name ASC;
 $$;
+

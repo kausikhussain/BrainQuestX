@@ -158,3 +158,4 @@ export const Podium: React.FC<PodiumProps> = ({ topThree, isResultsPublished }) 
     </div>
   );
 };
+

@@ -277,3 +277,4 @@ export const PublicLeaderboard: React.FC<PublicLeaderboardProps> = ({
     </div>
   );
 };
+

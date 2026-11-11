@@ -104,3 +104,4 @@ This runs an automated simulation of 60 simultaneous students registering, handl
 
 ## 📄 License
 This project is licensed under the MIT License.
+

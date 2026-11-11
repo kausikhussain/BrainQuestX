@@ -162,3 +162,4 @@ export const LandingView: React.FC<LandingViewProps> = ({
     </div>
   );
 };
+

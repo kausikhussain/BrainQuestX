@@ -121,3 +121,4 @@ Maintains competition status and official question timing.
 ### `get_leaderboard(p_competition_id)`
 - Aggregates Round 1, Round 2, and Total Scores.
 - Calculates dense rank with deterministic tie-breaking.
+

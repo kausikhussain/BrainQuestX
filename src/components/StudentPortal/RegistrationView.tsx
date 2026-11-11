@@ -188,3 +188,4 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({
     </div>
   );
 };
+

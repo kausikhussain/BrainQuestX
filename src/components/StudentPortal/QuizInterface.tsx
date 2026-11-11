@@ -281,3 +281,4 @@ export const QuizInterface: React.FC<QuizInterfaceProps> = ({
     </div>
   );
 };
+

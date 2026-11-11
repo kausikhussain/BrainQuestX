@@ -249,3 +249,4 @@ INSERT INTO public.question_options (id, question_id, label, text, is_correct, s
 ('r2-q10-b', 'r2-q10', 'B', 'my_variable', true, 2),
 ('r2-q10-c', 'r2-q10', 'C', 'global', false, 3),
 ('r2-q10-d', 'r2-q10', 'D', 'variable-1', false, 4);
+

@@ -190,3 +190,4 @@ export const WaitingRoomView: React.FC<WaitingRoomViewProps> = ({
     </div>
   );
 };
+

@@ -1,6 +1,7 @@
-import React from 'react';
-import { ShieldCheck, Trophy, LayoutDashboard, UserCheck, Wifi, WifiOff } from 'lucide-react';
+import React, { useState } from 'react';
+import { ShieldCheck, Trophy, LayoutDashboard, UserCheck, Wifi, WifiOff, Volume2, VolumeX } from 'lucide-react';
 import { CompetitionState } from '../types';
+import { sound } from '../utils/audio';
 
 interface NavbarProps {
   currentView: 'student' | 'admin' | 'leaderboard';
@@ -15,6 +16,13 @@ export const Navbar: React.FC<NavbarProps> = ({
   competitionState,
   isOnline,
 }) => {
+  const [isMuted, setIsMuted] = useState<boolean>(() => sound.getIsMuted());
+
+  const handleToggleAudio = () => {
+    const next = sound.toggleMute();
+    setIsMuted(next);
+  };
+
   const getStatusBadge = () => {
     switch (competitionState.status) {
       case 'registration_open':
@@ -107,45 +115,57 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        {/* Navigation Switcher */}
-        <nav className="flex items-center gap-1.5 bg-[#121A2B] p-1 rounded-xl border border-[#22304C]">
+        {/* Right Section: Sound Toggle + Navigation Switcher */}
+        <div className="flex items-center gap-2">
+          {/* Audio toggle button */}
           <button
-            onClick={() => onNavigate('student')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-              currentView === 'student'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-            }`}
+            onClick={handleToggleAudio}
+            title={isMuted ? 'Unmute Audio Cues' : 'Mute Audio Cues'}
+            className="p-2 rounded-xl bg-[#121A2B] border border-[#22304C] text-slate-400 hover:text-white transition-colors cursor-pointer"
           >
-            <UserCheck className="w-3.5 h-3.5" />
-            <span>Participant</span>
+            {isMuted ? <VolumeX className="w-4 h-4 text-slate-500" /> : <Volume2 className="w-4 h-4 text-cyan-400" />}
           </button>
 
-          <button
-            onClick={() => onNavigate('leaderboard')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-              currentView === 'leaderboard'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-            }`}
-          >
-            <Trophy className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Leaderboard</span>
-            <span className="sm:hidden">Ranks</span>
-          </button>
+          {/* Navigation Switcher */}
+          <nav className="flex items-center gap-1 bg-[#121A2B] p-1 rounded-xl border border-[#22304C]">
+            <button
+              onClick={() => onNavigate('student')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                currentView === 'student'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+              }`}
+            >
+              <UserCheck className="w-3.5 h-3.5" />
+              <span>Participant</span>
+            </button>
 
-          <button
-            onClick={() => onNavigate('admin')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-              currentView === 'admin'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-            }`}
-          >
-            <LayoutDashboard className="w-3.5 h-3.5" />
-            <span>Admin</span>
-          </button>
-        </nav>
+            <button
+              onClick={() => onNavigate('leaderboard')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                currentView === 'leaderboard'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+              }`}
+            >
+              <Trophy className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Leaderboard</span>
+              <span className="sm:hidden">Ranks</span>
+            </button>
+
+            <button
+              onClick={() => onNavigate('admin')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                currentView === 'admin'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+              }`}
+            >
+              <LayoutDashboard className="w-3.5 h-3.5" />
+              <span>Admin</span>
+            </button>
+          </nav>
+        </div>
       </div>
     </header>
   );
