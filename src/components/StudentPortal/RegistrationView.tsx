@@ -11,7 +11,9 @@ import {
   BookOpen, 
   Award,
   GraduationCap,
-  Key
+  Key,
+  Clock,
+  Lock
 } from 'lucide-react';
 import { competitionService } from '../../services/competitionService';
 import { StudentClass } from '../../types';
@@ -362,9 +364,6 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({
                   )}
                 </button>
               </div>
-            </form>
-            )}
-          </div>
 
               <div className="text-center pt-2">
                 <p className="text-[11px] text-[#647084] flex items-center justify-center gap-1.5 font-medium">
@@ -373,9 +372,9 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({
                 </p>
               </div>
             </form>
+          )}
           </div>
         </div>
-
       </div>
     </div>
   );
