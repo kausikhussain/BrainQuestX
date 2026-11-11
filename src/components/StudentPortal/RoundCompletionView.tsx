@@ -42,9 +42,9 @@ export const RoundCompletionView: React.FC<RoundCompletionViewProps> = ({
           <span className="text-sm font-bold text-white">{participant.student_name}</span>
         </div>
         <div className="flex items-center justify-between pb-3 border-b border-[#19243A] mb-3">
-          <span className="text-xs text-slate-400">School & Class:</span>
+          <span className="text-xs text-slate-400">School / Institution:</span>
           <span className="text-xs text-slate-300 font-medium">
-            {participant.school_name} (Class {participant.student_class})
+            {participant.school_name}
           </span>
         </div>
         <div className="flex items-center justify-between">

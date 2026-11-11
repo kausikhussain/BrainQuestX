@@ -37,7 +37,6 @@ export const App: React.FC = () => {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Sync hash changes
     const handleHashChange = () => {
       setCurrentView(getInitialView());
     };
@@ -58,7 +57,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#0B1020] text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-indigo-500/20 selection:text-indigo-900">
       {/* Navigation Header */}
       <Navbar
         currentView={currentView}
@@ -86,17 +85,17 @@ export const App: React.FC = () => {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-[#19243A] py-6 px-4 bg-[#0B1020]">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
+      <footer className="border-t border-slate-200 py-6 px-4 bg-white mt-auto">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500 font-medium">
           <div className="flex items-center gap-2">
-            <span className="font-mono font-bold text-slate-400">QUIZMANIA</span>
-            <span>•</span>
-            <span>Competitive Technical Examination Platform</span>
+            <span className="font-mono font-bold text-slate-900">QUIZMANIA</span>
+            <span>&bull;</span>
+            <span>Ultra-Premium School Examination Platform</span>
           </div>
           <div className="flex items-center gap-4">
-            <span>High Concurrency Engine (60+ Participants)</span>
-            <span>•</span>
-            <span className="font-mono text-indigo-400">20s Authoritative Timer</span>
+            <span>Authoritative Evaluation Engine</span>
+            <span>&bull;</span>
+            <span className="font-mono text-indigo-600 font-semibold">Continuous Zero-Loss Auto-Save</span>
           </div>
         </div>
       </footer>
@@ -105,4 +104,3 @@ export const App: React.FC = () => {
 };
 
 export default App;
-

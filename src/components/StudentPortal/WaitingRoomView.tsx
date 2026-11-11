@@ -48,7 +48,7 @@ export const WaitingRoomView: React.FC<WaitingRoomViewProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                {participant.school_name} • <span className="text-indigo-400 font-semibold">Class {participant.student_class}</span>
+                {participant.school_name}
               </p>
             </div>
           </div>
