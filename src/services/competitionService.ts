@@ -810,6 +810,12 @@ class CompetitionService {
     }
   }
 
+  public getParticipantFullscreenExitCount(participantId: string): number {
+    const a1 = this.getActiveExamAttempt(participantId, 1);
+    const a2 = this.getActiveExamAttempt(participantId, 2);
+    return (a1?.fullscreenExitCount || 0) + (a2?.fullscreenExitCount || 0);
+  }
+
   public markQuestionVisited(
     participantId: string,
     roundNumber: 1 | 2,
