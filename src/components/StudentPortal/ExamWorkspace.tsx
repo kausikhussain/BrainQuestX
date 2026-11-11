@@ -152,20 +152,13 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
     };
   }, [questionTimer, isSubmitting, handleAutoAdvance]);
 
-  // Full-screen monitoring effect
+  // Full-screen monitoring (Non-blocking: student is never locked out during exam)
   useEffect(() => {
     const handleFullscreenChange = () => {
       const isCurrentlyFullscreen = !!(
         document.fullscreenElement || (document as any).webkitFullscreenElement
       );
-
-      if (!isCurrentlyFullscreen && !attempt.isSubmitted && !isSubmitting) {
-        setIsFullscreenExited(true);
-        competitionService.recordFullscreenExit(participant.id, roundNumber);
-      } else if (isCurrentlyFullscreen && isFullscreenExited) {
-        setIsFullscreenExited(false);
-        competitionService.recordFullscreenReturn(participant.id, roundNumber);
-      }
+      setIsFullscreenExited(!isCurrentlyFullscreen);
     };
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -175,7 +168,7 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
     };
-  }, [participant.id, roundNumber, attempt.isSubmitted, isSubmitting, isFullscreenExited]);
+  }, []);
 
   const handleReturnToFullscreen = async () => {
     try {
@@ -188,7 +181,6 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
       console.warn('Could not re-enter fullscreen:', err);
     }
     setIsFullscreenExited(false);
-    competitionService.recordFullscreenReturn(participant.id, roundNumber);
   };
 
   // Answer selection handler
@@ -274,7 +266,7 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
   // Keyboard shortcuts: A, B, C, D or 1, 2, 3, 4
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (isSubmitting || isSubmitModalOpen || isFullscreenExited) return;
+      if (isSubmitting || isSubmitModalOpen) return;
 
       const key = e.key.toUpperCase();
       let optIdx = -1;
@@ -336,39 +328,7 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
   const isFinalQuestion = currentQuestionIndex === roundQuestions.length - 1;
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-12 flex flex-col min-h-[calc(100vh-8rem)]">
-      
-      {/* ==================== FULL-SCREEN EXIT WARNING OVERLAY ==================== */}
-      {isFullscreenExited && (
-        <div className="fixed inset-0 z-50 bg-[#172033]/80 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 text-center shadow-soft-lg border border-[#E7EAF0]">
-            <div className="w-14 h-14 rounded-2xl bg-[#FEE2E2] text-[#C2414A] flex items-center justify-center mx-auto mb-4 shadow-soft-sm">
-              <ShieldAlert className="w-7 h-7" />
-            </div>
-            
-            <h2 className="text-xl font-extrabold text-[#172033] mb-2 tracking-tight">
-              Full-Screen Mode Required
-            </h2>
-            
-            <p className="text-xs sm:text-sm text-[#647084] leading-relaxed mb-4">
-              To uphold official examination integrity, full-screen mode must remain active throughout your attempt. This exit event has been recorded in candidate telemetry with a precise timestamp.
-            </p>
-            
-            <div className="p-3.5 bg-[#FEF3C7] border border-[#FDE68A] rounded-xl text-xs text-[#B7791F] mb-6 font-semibold">
-              Warning: The 20-second per-question timer continues counting down in the background. Return to full screen immediately.
-            </div>
-
-            <button
-              onClick={handleReturnToFullscreen}
-              className="w-full py-3.5 px-6 rounded-xl font-bold text-sm bg-[#465FE5] hover:bg-[#384EC9] text-white shadow-soft transition-all flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Maximize2 className="w-4 h-4" />
-              <span>Return to Full-Screen Mode</span>
-            </button>
-          </div>
-        </div>
-      )}
-
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col min-h-[calc(100vh-8rem)]">
       {/* ==================== TOP EXAMINATION HEADER ==================== */}
       <div className="bg-white border border-[#E7EAF0] rounded-2xl p-4 sm:p-5 shadow-soft mb-6">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">

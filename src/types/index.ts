@@ -12,6 +12,7 @@ export interface Participant {
   id: string;
   competition_id: string;
   access_code: string;
+  session_token?: string;
   student_name: string;
   school_name: string;
   student_class: StudentClass;

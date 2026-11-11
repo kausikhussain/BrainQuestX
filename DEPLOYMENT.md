@@ -33,22 +33,24 @@ To eliminate ordering conflicts or missed steps, we have prepared a single, cons
 6. Confirm the execution output says `Success. No rows returned` (executed in ~1.5 seconds).
 
 ### What This Script Installs in One Step:
-- **Core Tables:** `competitions`, `rounds`, `questions`, `question_options`, `participants`, `submissions`, `exam_attempts`, `admin_roles`.
+- **Core Tables:** `competitions`, `rounds`, `questions`, `question_options`, `participants` (with 256-bit `session_token`), `submissions`, `exam_attempts`, `admin_roles`.
 - **Default Competition:** Bootstraps competition `QUIZ-2026` in status `registration_open`.
 - **Rounds 1 & 2:** Initializes General Paper (Round 1) and Python Subject Paper (Round 2).
 - **Official 20 Questions & 80 Options:** Seeds all questions from `Generalpaper.docx` and `Subjectpaper.docx` with answer keys securely stored in `question_options`.
-- **Row Level Security (RLS):**
+- **Row Level Security (RLS) & Table Grants:**
   - Revokes direct public access on `question_options` (prevents answer leaks).
   - Enforces public access through client view `v_client_questions`.
-  - **Fixed RLS on `exam_attempts`:** Denies public/anon direct `SELECT` access, stopping candidate snooping.
-- **Server-Authoritative Stored Procedures (RPCs):**
-  - `register_participant`: Exact frontend signature, duplicate re-entry protection.
-  - `start_or_restore_attempt`: Idempotent session recovery without resetting timers or reshuffling.
-  - `save_attempt_answer`: Atomic answer persistence with deadline checks.
-  - `submit_exam_attempt_rpc`: Server-side scoring against `question_options.is_correct`.
-  - `record_fullscreen_event`: Telemetry logging.
+  - **Hardened RLS on `exam_attempts` and `admin_roles`:** Denies public/anon direct `SELECT` and table operations (`REVOKE ALL FROM anon, public`), stopping candidate snooping. Direct access is restricted to authenticated admins and service role.
+- **Server-Authoritative Stored Procedures (RPCs with Cryptographic Ownership Validation):**
+  - `register_participant`: Exact frontend signature. If candidate is duplicate, returns `is_duplicate: true, success: false` without exposing access codes or tokens (anti-hijacking).
+  - `authenticate_participant`: Candidate session recovery via secret 6-character `access_code`.
+  - `start_or_restore_attempt`: Idempotent session recovery requiring `p_access_token`. Initializes 20s countdown for Question 1.
+  - `start_question_timer_rpc`: Authoritative 20s question timer in PostgreSQL. Recovers running timer on reload without resetting.
+  - `save_attempt_answer`: Atomic answer persistence enforcing participant ownership and strict 20-second deadline (+ 1.5s network grace buffer). Rejects late submissions with `is_expired: true`.
+  - `submit_exam_attempt_rpc`: Server-side scoring against `question_options.is_correct` with ownership verification.
+  - `record_fullscreen_event`: Telemetry logging requiring `p_access_token`.
   - `get_leaderboard`: Multi-tier tie-breaking leaderboard matching frontend interface.
-  - `verify_admin_role_rpc`: Server-side RBAC role verification.
+  - `verify_admin_role_rpc`: Server-side RBAC role verification against `auth.uid()`.
 
 ---
 

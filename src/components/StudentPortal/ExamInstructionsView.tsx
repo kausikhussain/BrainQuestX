@@ -222,15 +222,25 @@ export const ExamInstructionsView: React.FC<ExamInstructionsViewProps> = ({
               )}
             </div>
 
-            <button
-              onClick={handleStartWithFullscreen}
-              disabled={!hasConfirmed}
-              className="w-full sm:w-auto px-8 py-3.5 rounded-xl font-bold text-sm bg-[#465FE5] hover:bg-[#384EC9] disabled:opacity-40 disabled:cursor-not-allowed text-white shadow-soft transition-all flex items-center justify-center gap-2.5 cursor-pointer"
-            >
-              <Maximize2 className="w-4 h-4" />
-              <span>Enter Full-Screen & Start {roundNumber === 1 ? 'Round 1' : 'Round 2'}</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
+            {competitionState.status === 'in_progress' && competitionState.current_round_number === roundNumber ? (
+              <button
+                onClick={handleStartWithFullscreen}
+                disabled={!hasConfirmed}
+                className={`w-full sm:w-auto px-8 py-3.5 rounded-xl font-bold text-sm text-white shadow-soft transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  hasConfirmed 
+                    ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/20 hover:-translate-y-0.5' 
+                    : 'bg-slate-300 cursor-not-allowed opacity-60'
+                }`}
+              >
+                <span>Start Examination</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            ) : (
+              <div className="flex items-center gap-2 px-5 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
+                <span>Waiting for Organizer to start Round {roundNumber}...</span>
+              </div>
+            )}
           </div>
 
         </div>

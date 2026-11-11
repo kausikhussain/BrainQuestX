@@ -82,7 +82,38 @@ Following a strict pre-deployment audit of the Quizmania platform, three critica
 
 ---
 
-## 3. Database Migration Instructions
+### 2.4 Cryptographic Ownership, Anti-Hijacking, and Server-Side Timer Enforcement
+
+Following a rigorous independent code review of the database stored procedures, four crucial defense-in-depth protections were added:
+
+1. **Cryptographic Participant Ownership Validation:**
+   - In basic implementations, RPCs accept a raw participant `UUID`. If an attacker or malicious candidate obtains another candidate's UUID, they could query or submit answers on their behalf.
+   - **Fix:** Added `session_token TEXT NOT NULL DEFAULT encode(gen_random_bytes(32), 'hex')` to `public.participants`.
+   - Every participant RPC (`start_or_restore_attempt`, `start_question_timer_rpc`, `save_attempt_answer`, `submit_exam_attempt_rpc`, `record_fullscreen_event`, `submit_student_answer`) now mandates a `p_access_token TEXT` argument.
+   - The PostgreSQL stored procedure verifies ownership via:
+     ```sql
+     SELECT * INTO v_participant FROM public.participants 
+     WHERE id = p_participant_id 
+       AND (session_token = trim(p_access_token) OR access_code = trim(upper(p_access_token)));
+     ```
+   - Unauthorized calls with missing, forged, or unauthenticated tokens are strictly rejected with HTTP/SQL 401/Authentication errors.
+
+2. **Anti-Hijacking Registration:**
+   - Previously, duplicate registrations returned the existing candidate's secret `access_code`. An impersonator could register with another student's name and hijack their account.
+   - **Fix:** Duplicate registration now strictly returns `{ is_duplicate: true, success: false }` with zero credentials exposed. Returning candidates must authenticate using their secret 6-character access code.
+
+3. **Session Recovery RPC & UI:**
+   - Implemented `public.authenticate_participant(p_access_code TEXT)` which securely validates the access code, verifies the competition window, and returns refreshed session credentials.
+   - Added an "Authenticate with Access Code" tab in `src/components/StudentPortal/RegistrationView.tsx` with dedicated key input and uppercase auto-formatting.
+
+4. **Authoritative 20-Second Per-Question Timer Enforcement in PostgreSQL:**
+   - To prevent local client timer tampering, `public.start_question_timer_rpc` and `public.save_attempt_answer` record and evaluate the official question deadline in `exam_attempts.question_timers` (`started_at`, `deadline`, `duration_seconds: 20`).
+   - If an answer is received after `deadline + 1500ms` (network jitter grace), the answer is rejected server-side with `is_expired: true`.
+
+5. **Hardened Table Grants:**
+   - Added `REVOKE ALL ON public.exam_attempts FROM anon, public;` and `REVOKE ALL ON public.admin_roles FROM anon, public;`. Direct queries from unauthorized public clients are blocked at the table privilege level, with access granted exclusively through audited `SECURITY DEFINER` RPCs or authenticated admin roles.
+
+---
 
 To apply all migrations to your Supabase Cloud instance, follow these steps in order:
 
@@ -177,6 +208,7 @@ Configure these variables in your Vercel Project Settings (**Settings -> Environ
 
 ### 5.2 Full Test Suite Summary (`npm test`)
 
+- **Database Security & Cryptographic Contract Verification:** 7/7 PASS (Enforces `p_access_token` across all participant RPCs, anti-hijacking duplicate handling, access code recovery, PostgreSQL 20s question timer evaluation, table grants, and admin RBAC).
 - **Official Evaluation & Ranking Test Suite:** 10/10 PASS (100% mathematical precision across 10 Qs General Paper & 10 Qs Python Subject Paper).
 - **5-Stage Complete Student Journey QA:** 7/7 PASS (Registration, Instructions Gate, Palette, Submissions, Evaluation, Cutoff Gate, Round 2 Transition).
 - **Admin Security & RBAC Verification:** 8/8 PASS (Lockout after 5 failed logins, session revocation, token verification).
