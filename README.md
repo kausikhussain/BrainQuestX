@@ -87,7 +87,7 @@ This runs an automated simulation of 60 simultaneous students registering, handl
 | Interface | URL Route | Purpose |
 |---|---|---|
 | **Student Portal** | `/#` | Minimalist, focused candidate portal (Name, School, Class: 11th or 12th) |
-| **Admin Dashboard** | `/#admin` | Organizer control room (PIN: `quizmania2026`). Registration toggle, round starter, question stepper, CSV export |
+| **Admin Dashboard** | `/#admin` | Organizer control room. Registration toggle, round starter, question stepper, audit telemetry, and CSV export |
 | **Public Leaderboard** | `/#leaderboard` | Live rankings, podium (1st, 2nd, 3rd) with confetti, and deterministic tie-breaking |
 | **Projector Mode** | Click *"Auditorium Projector Mode"* on `/#leaderboard` | Fullscreen, high-contrast, large-typography display for hall projectors |
 
