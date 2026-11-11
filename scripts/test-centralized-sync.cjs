@@ -22,7 +22,25 @@ async function runCentralizedSyncTests() {
 
   // TEST 2: Centralized Participant Roster Loading
   console.log('[TEST 2] Testing admin_get_participants Centralized Cloud Query...');
-  const { data: cloudRoster, error: rosterErr } = await supabase.rpc('admin_get_participants');
+  let adminToken = '';
+  try {
+    const { data: loginData } = await supabase.rpc('admin_login_rpc', {
+      p_username: 'admin',
+      p_password: 'admin123'
+    });
+    if (loginData && loginData.success && loginData.token) {
+      adminToken = loginData.token;
+    }
+  } catch {}
+
+  let { data: cloudRoster, error: rosterErr } = await supabase.rpc('admin_get_participants', {
+    p_admin_token: adminToken
+  });
+  if (rosterErr && (rosterErr.code === 'PGRST300' || rosterErr.code === 'PGRST203')) {
+    const res = await supabase.rpc('admin_get_participants');
+    cloudRoster = res.data;
+    rosterErr = res.error;
+  }
   if (rosterErr && rosterErr.code === 'PGRST203') {
     console.log('  -> Note: PGRST203 function overload detected. Both admin_get_participants() and admin_get_participants(text) exist in DB.');
     console.log('  -> Hotfix script generated in supabase/FIX_OVERLOAD_AND_PERMISSIONS.sql to unify this into a single authoritative procedure.\n');
