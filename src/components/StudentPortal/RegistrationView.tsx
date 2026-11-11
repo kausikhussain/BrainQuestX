@@ -371,11 +371,8 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({
                   <span>Session encrypted locally &bull; Zero external trackers</span>
                 </p>
               </div>
-            </form>
-          )}
           </div>
         </div>
       </div>
-    </div>
   );
 };

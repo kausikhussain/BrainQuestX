@@ -117,6 +117,21 @@ const verifyAdminMatch = sqlContent.match(/CREATE OR REPLACE FUNCTION public\.ve
 assert(verifyAdminMatch !== null, 'Found verify_admin_role_rpc function definition');
 assert(verifyAdminMatch[0].includes('auth.uid()'), 'verify_admin_role_rpc inspects cryptographically authenticated auth.uid()');
 
+// 1.9 Admin Username/Password & Bcrypt Verification
+assert(sqlContent.includes('CREATE TABLE IF NOT EXISTS public.admin_users'), 'admin_users table defined');
+assert(sqlContent.includes('ALTER TABLE public.admin_users ENABLE ROW LEVEL SECURITY;'), 'RLS enabled on admin_users');
+assert(sqlContent.includes('REVOKE ALL ON TABLE public.admin_users FROM anon, public;'), 'Direct permissions on admin_users revoked from anon and public');
+assert(sqlContent.includes('FUNCTION public.admin_login_rpc'), 'admin_login_rpc RPC defined');
+const adminLoginMatch = sqlContent.match(/CREATE OR REPLACE FUNCTION public\.admin_login_rpc[\s\S]*?AS\s*\$\$[\s\S]*?\$\$/);
+assert(adminLoginMatch !== null, 'Found admin_login_rpc function definition');
+assert(adminLoginMatch[0].includes('extensions.crypt'), 'admin_login_rpc verifies password via bcrypt extensions.crypt');
+assert(adminLoginMatch[0].includes('extensions'), 'admin_login_rpc includes extensions in search_path');
+assert(sqlContent.includes('FUNCTION public.verify_admin_session_rpc'), 'verify_admin_session_rpc RPC defined');
+assert(sqlContent.includes('FUNCTION public.admin_logout_rpc'), 'admin_logout_rpc RPC defined');
+assert(sqlContent.includes('p_admin_token TEXT DEFAULT NULL'), 'Admin protected RPCs accept p_admin_token');
+assert(sqlContent.includes('DROP FUNCTION IF EXISTS public.admin_get_participants();'), 'admin_get_participants drops old 0-param overload to resolve HTTP 300');
+assert(sqlContent.includes('FUNCTION public.admin_regenerate_student_access_code'), 'admin_regenerate_student_access_code RPC defined');
+
 console.log('\n[SECTION 2] Auditing Frontend TypeScript Client Contracts...');
 
 // --------------------------------------------------------------------
@@ -129,6 +144,8 @@ assert(compServiceCode.includes('getParticipantCredential'), 'competitionService
 assert(compServiceCode.includes('loginWithAccessCode'), 'competitionService exports loginWithAccessCode');
 assert(compServiceCode.includes('authenticate_participant'), 'competitionService invokes authenticate_participant RPC');
 assert(compServiceCode.includes('start_question_timer_rpc'), 'competitionService synchronizes per-question timer with Supabase');
+assert(compServiceCode.includes('admin_login_rpc'), 'competitionService calls admin_login_rpc for server-side auth');
+assert(compServiceCode.includes('getActiveAdminToken'), 'competitionService implements getActiveAdminToken');
 
 const registrationViewPath = path.join(__dirname, '..', 'src', 'components', 'StudentPortal', 'RegistrationView.tsx');
 const regViewCode = fs.readFileSync(registrationViewPath, 'utf-8');

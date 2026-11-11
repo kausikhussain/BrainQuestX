@@ -25,10 +25,13 @@ import {
   ShieldCheck,
   LogOut,
   Zap,
-  Activity,
-  Radio,
-  Wifi,
-  RefreshCw
+  Copy,
+  Check,
+  Key,
+  RefreshCw,
+  CirclePlay,
+  CirclePause,
+  Code2
 } from 'lucide-react';
 import { CompetitionState, Participant, LeaderboardEntry, StudentClass } from '../../types';
 import { CLIENT_QUESTIONS } from '../../data/questions';
@@ -71,8 +74,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [selectedSchool, setSelectedSchool] = useState<string>('all');
   const [selectedClass, setSelectedClass] = useState<string>('all');
 
-  // Active Admin View Tab: Live Monitoring vs Official Roster
-  const [adminViewTab, setAdminViewTab] = useState<'monitoring' | 'roster'>('monitoring');
+  // Tab state: 'students' (student access management) vs 'leaderboard' (exam standings)
+  const [activeTab, setActiveTab] = useState<'students' | 'leaderboard'>('students');
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [regSuccessMsg, setRegSuccessMsg] = useState<string | null>(null);
 
   // Qualification cutoff state
   const [qualifyingScore, setQualifyingScore] = useState<number>(() => {
@@ -197,7 +203,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   }, [leaderboard, searchQuery, selectedSchool, selectedClass]);
 
-  // Filtered live participants list for real-time monitoring
+  // Copy access code to clipboard with visual feedback
+  const handleCopyCode = (code: string) => {
+    if (!code) return;
+    try {
+      navigator.clipboard.writeText(code);
+      setCopiedCode(code);
+      setTimeout(() => setCopiedCode(null), 2000);
+    } catch {
+      // Fallback
+    }
+  };
+
+  // Securely regenerate student access code preserving exam progress
+  const handleRegenerateAccessCode = async (participantId: string, studentName: string) => {
+    const confirmed = window.confirm(
+      `Regenerate a new Access Code for ${studentName}?\n\nThis will invalidate their previous code while keeping their registered profile, answers, and score completely intact.`
+    );
+    if (!confirmed) return;
+
+    setRegeneratingId(participantId);
+    setRegSuccessMsg(null);
+    try {
+      const res = await competitionService.regenerateStudentAccessCode(participantId, adminToken || undefined);
+      if (res.success && res.access_code) {
+        setRegSuccessMsg(`New Access Code for ${studentName} generated: ${res.access_code}`);
+        refreshData();
+      } else {
+        alert(res.error || 'Failed to regenerate access code.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'An error occurred during access code regeneration.');
+    } finally {
+      setRegeneratingId(null);
+    }
+  };
+
+  // Filtered registered students table
   const filteredParticipants = useMemo(() => {
     return participants.filter((p) => {
       const q = searchQuery.trim().toLowerCase();
@@ -205,7 +247,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         !q ||
         p.student_name.toLowerCase().includes(q) ||
         p.school_name.toLowerCase().includes(q) ||
-        p.access_code.toLowerCase().includes(q);
+        (p.access_code && p.access_code.toLowerCase().includes(q));
       const matchesSchool = selectedSchool === 'all' || p.school_name === selectedSchool;
       const matchesClass = selectedClass === 'all' || p.student_class === selectedClass;
       return matchesSearch && matchesSchool && matchesClass;
@@ -220,6 +262,117 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const avgScore = leaderboard.length > 0
     ? Math.round((leaderboard.reduce((acc, curr) => acc + curr.total_score, 0) / leaderboard.length) * 10) / 10
     : 0;
+
+  // Examination Round Controls State & Handlers
+  const [isRoundActionLoading, setIsRoundActionLoading] = useState<boolean>(false);
+  const [roundActionFeedback, setRoundActionFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const isRound2Unlocked = useMemo(() => {
+    return (
+      competitionState.current_round_number === 2 ||
+      qualifiedCount > 0 ||
+      competitionState.status === 'completed' ||
+      competitionState.status === 'results_published'
+    );
+  }, [competitionState.current_round_number, competitionState.status, qualifiedCount]);
+
+  const handleStartRound = async (roundNumber: 1 | 2) => {
+    const roundTitle = roundNumber === 1 ? 'Round 1 (General Paper)' : 'Round 2 (Python Subject Paper)';
+    const candidatesNote = roundNumber === 1 
+      ? `all ${totalRegistered} registered candidates`
+      : `all ${qualifiedCount} shortlisted candidates`;
+
+    const confirmed = window.confirm(
+      `Start ${roundTitle} for ${candidatesNote}?\n\nThis will synchronize competition state with Supabase and release Question 1 to all connected computers simultaneously.`
+    );
+    if (!confirmed) return;
+
+    setIsRoundActionLoading(true);
+    setRoundActionFeedback(null);
+    try {
+      await competitionService.startRound(roundNumber, adminToken || undefined);
+      setRoundActionFeedback({
+        message: `${roundTitle} successfully started! Live question released to candidates.`,
+        type: 'success',
+      });
+      refreshData();
+    } catch (err: any) {
+      setRoundActionFeedback({
+        message: err?.message || `Failed to start ${roundTitle}.`,
+        type: 'error',
+      });
+    } finally {
+      setIsRoundActionLoading(false);
+    }
+  };
+
+  const handlePauseRound = async () => {
+    const roundNum = competitionState.current_round_number || 1;
+    setIsRoundActionLoading(true);
+    setRoundActionFeedback(null);
+    try {
+      await competitionService.pauseRound(adminToken || undefined);
+      setRoundActionFeedback({
+        message: `Round ${roundNum} examination paused. Question timer halted.`,
+        type: 'success',
+      });
+      refreshData();
+    } catch (err: any) {
+      setRoundActionFeedback({
+        message: err?.message || 'Failed to pause examination.',
+        type: 'error',
+      });
+    } finally {
+      setIsRoundActionLoading(false);
+    }
+  };
+
+  const handleResumeRound = async () => {
+    const roundNum = competitionState.current_round_number || 1;
+    setIsRoundActionLoading(true);
+    setRoundActionFeedback(null);
+    try {
+      await competitionService.resumeRound(adminToken || undefined);
+      setRoundActionFeedback({
+        message: `Round ${roundNum} examination resumed. Countdown synchronized.`,
+        type: 'success',
+      });
+      refreshData();
+    } catch (err: any) {
+      setRoundActionFeedback({
+        message: err?.message || 'Failed to resume examination.',
+        type: 'error',
+      });
+    } finally {
+      setIsRoundActionLoading(false);
+    }
+  };
+
+  const handleEndRound = async (roundNumber: 1 | 2) => {
+    const roundTitle = roundNumber === 1 ? 'Round 1 (General Paper)' : 'Round 2 (Python Subject Paper)';
+    const confirmed = window.confirm(
+      `End ${roundTitle} for all candidates?\n\nThis will stop further submissions for this round and calculate candidate qualifications for Round 2.`
+    );
+    if (!confirmed) return;
+
+    setIsRoundActionLoading(true);
+    setRoundActionFeedback(null);
+    try {
+      await competitionService.endRound(roundNumber, adminToken || undefined);
+      setRoundActionFeedback({
+        message: `${roundTitle} ended successfully. Submissions locked.`,
+        type: 'success',
+      });
+      refreshData();
+    } catch (err: any) {
+      setRoundActionFeedback({
+        message: err?.message || `Failed to end ${roundTitle}.`,
+        type: 'error',
+      });
+    } finally {
+      setIsRoundActionLoading(false);
+    }
+  };
 
   // ==================== UNINITIALIZED / LOGIN STATE ====================
   if (!isAuthenticated) {
@@ -433,6 +586,360 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </div>
 
+      {/* Feedback Banner for Round Controls */}
+      {roundActionFeedback && (
+        <div
+          className={`mb-6 p-4 rounded-2xl border text-xs font-semibold flex items-center justify-between shadow-soft-sm animate-fadeIn ${
+            roundActionFeedback.type === 'success'
+              ? 'bg-[#E8F5E9] border-[#C8E6C9] text-[#16845B]'
+              : 'bg-[#FEE2E2] border-[#FCA5A5] text-[#C2414A]'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {roundActionFeedback.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-[#16845B]" />
+            ) : (
+              <AlertCircle className="w-4 h-4 shrink-0 text-[#C2414A]" />
+            )}
+            <span>{roundActionFeedback.message}</span>
+          </div>
+          <button
+            onClick={() => setRoundActionFeedback(null)}
+            className="text-xs hover:underline font-bold cursor-pointer ml-4"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* EXAMINATION ROUND CONTROLS (LIVE ORCHESTRATION PANEL) */}
+      {/* ======================================================== */}
+      <div className="bg-white border border-[#E7EAF0] rounded-3xl p-6 sm:p-7 shadow-soft mb-8">
+        {/* Section Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-[#E7EAF0]">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="w-2 h-2 rounded-full bg-[#465FE5] animate-ping" />
+              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#465FE5] bg-[#E9EDFF] border border-[#C5D0FF] px-2.5 py-0.5 rounded-full">
+                Live Orchestration Engine
+              </span>
+            </div>
+            <h2 className="text-xl font-black text-[#172033] tracking-tight">
+              Examination Round Controls
+            </h2>
+            <p className="text-xs text-[#647084] mt-0.5">
+              Synchronize live examination lifecycle and push questions across all connected student workstations.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="px-3 py-1.5 rounded-xl bg-[#F8F9FC] border border-[#E7EAF0] text-xs font-mono font-bold text-[#172033] flex items-center gap-2">
+              <span className="text-[#647084]">Global State:</span>
+              <span className="px-2 py-0.5 rounded-md bg-white border border-[#E7EAF0] text-[#465FE5] uppercase text-[11px]">
+                {competitionState.status}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Round Cards Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+          
+          {/* ----------------- ROUND 1 CARD ----------------- */}
+          <div className={`p-6 rounded-2xl border transition-all ${
+            competitionState.status === 'in_progress' && competitionState.current_round_number === 1
+              ? 'bg-[#F4FDF7] border-[#A3E6B7] ring-2 ring-[#16845B]/20 shadow-soft-sm'
+              : 'bg-[#F8F9FC] border-[#E7EAF0]'
+          }`}>
+            {/* Card Header */}
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-[#E9EDFF] border border-[#C5D0FF] flex items-center justify-center text-[#465FE5] shrink-0">
+                  <Zap className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#465FE5]">
+                    CURRENT EXAMINATION
+                  </span>
+                  <h3 className="text-base font-black text-[#172033] tracking-tight">
+                    Round 1 — General Paper
+                  </h3>
+                </div>
+              </div>
+
+              {/* Status Badge */}
+              <div>
+                {competitionState.status === 'in_progress' && competitionState.current_round_number === 1 ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E8F5E9] text-[#16845B] border border-[#C8E6C9] text-xs font-bold font-mono">
+                    <span className="w-2 h-2 rounded-full bg-[#16845B] animate-pulse" />
+                    LIVE: IN PROGRESS
+                  </span>
+                ) : competitionState.status === 'registration_closed' && competitionState.current_round_number === 1 ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFFBEB] text-[#B7791F] border border-[#FDE68A] text-xs font-bold font-mono">
+                    <span className="w-2 h-2 rounded-full bg-[#B7791F]" />
+                    PAUSED
+                  </span>
+                ) : (competitionState.current_round_number === 2 || competitionState.status === 'completed' || competitionState.status === 'results_published' || leaderboard.some(e => e.round_1_score !== undefined && e.round_1_score > 0)) ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E9EDFF] text-[#465FE5] border border-[#C5D0FF] text-xs font-bold font-mono">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    CONCLUDED
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#F1F4F9] text-[#647084] border border-[#E7EAF0] text-xs font-bold font-mono">
+                    NOT STARTED
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Subtitle / Specs */}
+            <div className="text-xs text-[#647084] mb-5 font-medium flex items-center gap-2">
+              <Clock className="w-3.5 h-3.5 text-[#8E9BAE]" />
+              <span>10 Questions · 20 seconds each · 100 marks · Zero negative marking</span>
+            </div>
+
+            {/* Metrics Strip */}
+            <div className="grid grid-cols-3 gap-2 p-3 bg-white border border-[#E7EAF0] rounded-xl mb-5 text-center">
+              <div>
+                <span className="block text-[10px] uppercase font-bold text-[#8E9BAE] font-mono">Round Status</span>
+                <span className="text-xs font-extrabold text-[#172033] mt-0.5 block truncate">
+                  {competitionState.status === 'in_progress' && competitionState.current_round_number === 1
+                    ? 'In Progress'
+                    : competitionState.status === 'registration_closed' && competitionState.current_round_number === 1
+                    ? 'Paused'
+                    : (competitionState.current_round_number === 2 || competitionState.status === 'completed' || competitionState.status === 'results_published')
+                    ? 'Concluded'
+                    : 'Not Started'}
+                </span>
+              </div>
+              <div className="border-x border-[#E7EAF0]">
+                <span className="block text-[10px] uppercase font-bold text-[#8E9BAE] font-mono">Active Question</span>
+                <span className="text-xs font-extrabold text-[#465FE5] mt-0.5 block">
+                  {competitionState.status === 'in_progress' && competitionState.current_round_number === 1
+                    ? `Q${competitionState.current_question_number || 1} of 10`
+                    : '10 Qs Total'}
+                </span>
+              </div>
+              <div>
+                <span className="block text-[10px] uppercase font-bold text-[#8E9BAE] font-mono">Candidates</span>
+                <span className="text-xs font-extrabold text-[#16845B] mt-0.5 block font-mono">
+                  {totalRegistered} Enrolled
+                </span>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Start Round 1 Button */}
+              {!(competitionState.status === 'in_progress' && competitionState.current_round_number === 1) && (
+                <button
+                  onClick={() => handleStartRound(1)}
+                  disabled={isRoundActionLoading}
+                  className="px-5 py-2.5 rounded-xl font-bold text-xs bg-[#465FE5] hover:bg-[#384ECC] disabled:opacity-50 text-white shadow-soft transition-all flex items-center gap-2 cursor-pointer hover:-translate-y-0.5 active:translate-y-0"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>{isRoundActionLoading ? 'Starting...' : 'Start Round 1'}</span>
+                </button>
+              )}
+
+              {/* Pause / Resume Controls */}
+              {competitionState.status === 'in_progress' && competitionState.current_round_number === 1 && (
+                <button
+                  onClick={handlePauseRound}
+                  disabled={isRoundActionLoading}
+                  className="px-4 py-2.5 rounded-xl font-bold text-xs bg-[#FFFBEB] hover:bg-[#FEF3C7] text-[#B7791F] border border-[#FDE68A] shadow-soft transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <CirclePause className="w-3.5 h-3.5" />
+                  <span>Pause</span>
+                </button>
+              )}
+
+              {competitionState.status === 'registration_closed' && competitionState.current_round_number === 1 && (
+                <button
+                  onClick={handleResumeRound}
+                  disabled={isRoundActionLoading}
+                  className="px-4 py-2.5 rounded-xl font-bold text-xs bg-[#E8F5E9] hover:bg-[#C8E6C9] text-[#16845B] border border-[#C8E6C9] shadow-soft transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <CirclePlay className="w-3.5 h-3.5" />
+                  <span>Resume</span>
+                </button>
+              )}
+
+              {/* End Round 1 Button */}
+              {(competitionState.current_round_number === 1 && (competitionState.status === 'in_progress' || competitionState.status === 'registration_closed')) && (
+                <button
+                  onClick={() => handleEndRound(1)}
+                  disabled={isRoundActionLoading}
+                  className="px-4 py-2.5 rounded-xl font-bold text-xs bg-[#FEE2E2] hover:bg-[#FCA5A5] text-[#C2414A] border border-[#FCA5A5] shadow-soft transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>End Round 1</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* ----------------- ROUND 2 CARD ----------------- */}
+          <div className={`p-6 rounded-2xl border transition-all ${
+            competitionState.status === 'in_progress' && competitionState.current_round_number === 2
+              ? 'bg-[#F4FDF7] border-[#A3E6B7] ring-2 ring-[#16845B]/20 shadow-soft-sm'
+              : !isRound2Unlocked
+              ? 'bg-[#F8F9FC] border-[#E7EAF0] opacity-90'
+              : 'bg-white border-[#E7EAF0]'
+          }`}>
+            {/* Card Header */}
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div className="flex items-center gap-3">
+                <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
+                  isRound2Unlocked
+                    ? 'bg-[#E8F5E9] border border-[#C8E6C9] text-[#16845B]'
+                    : 'bg-[#F1F4F9] border border-[#E7EAF0] text-[#8E9BAE]'
+                }`}>
+                  <Code2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#16845B]">
+                    STAGE 2 / SUBJECT PAPER
+                  </span>
+                  <h3 className="text-base font-black text-[#172033] tracking-tight">
+                    Round 2 — Python Subject Paper
+                  </h3>
+                </div>
+              </div>
+
+              {/* Status Badge */}
+              <div>
+                {!isRound2Unlocked ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#F1F4F9] text-[#647084] border border-[#E7EAF0] text-xs font-bold font-mono">
+                    <Lock className="w-3 h-3 text-[#8E9BAE]" />
+                    LOCKED
+                  </span>
+                ) : competitionState.status === 'in_progress' && competitionState.current_round_number === 2 ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E8F5E9] text-[#16845B] border border-[#C8E6C9] text-xs font-bold font-mono">
+                    <span className="w-2 h-2 rounded-full bg-[#16845B] animate-pulse" />
+                    LIVE: IN PROGRESS
+                  </span>
+                ) : competitionState.status === 'registration_closed' && competitionState.current_round_number === 2 ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFFBEB] text-[#B7791F] border border-[#FDE68A] text-xs font-bold font-mono">
+                    <span className="w-2 h-2 rounded-full bg-[#B7791F]" />
+                    PAUSED
+                  </span>
+                ) : (competitionState.status === 'completed' || competitionState.status === 'results_published') ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E9EDFF] text-[#465FE5] border border-[#C5D0FF] text-xs font-bold font-mono">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    COMPLETED
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E8F5E9] text-[#16845B] border border-[#C8E6C9] text-xs font-bold font-mono">
+                    READY TO START
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Subtitle / Specs */}
+            <div className="text-xs text-[#647084] mb-5 font-medium flex items-center gap-2">
+              <Clock className="w-3.5 h-3.5 text-[#8E9BAE]" />
+              <span>10 Questions · 20 seconds each · 100 marks · Python Programming</span>
+            </div>
+
+            {/* Locked vs Unlocked View */}
+            {!isRound2Unlocked ? (
+              <div className="p-4 rounded-xl bg-[#F8F9FC] border border-dashed border-[#CBD5E1] text-xs text-[#647084] flex items-center gap-3">
+                <Lock className="w-5 h-5 text-[#8E9BAE] shrink-0" />
+                <span>
+                  <strong>Locked:</strong> Round 1 must finish and candidates meet the <strong className="text-[#172033]">&ge; {qualifyingScore}% cutoff</strong> before Round 2 can be initiated.
+                </span>
+              </div>
+            ) : (
+              <>
+                {/* Metrics Strip */}
+                <div className="grid grid-cols-3 gap-2 p-3 bg-white border border-[#E7EAF0] rounded-xl mb-5 text-center">
+                  <div>
+                    <span className="block text-[10px] uppercase font-bold text-[#8E9BAE] font-mono">Round Status</span>
+                    <span className="text-xs font-extrabold text-[#172033] mt-0.5 block truncate">
+                      {competitionState.status === 'in_progress' && competitionState.current_round_number === 2
+                        ? 'In Progress'
+                        : competitionState.status === 'registration_closed' && competitionState.current_round_number === 2
+                        ? 'Paused'
+                        : (competitionState.status === 'completed' || competitionState.status === 'results_published')
+                        ? 'Completed'
+                        : 'Ready to Start'}
+                    </span>
+                  </div>
+                  <div className="border-x border-[#E7EAF0]">
+                    <span className="block text-[10px] uppercase font-bold text-[#8E9BAE] font-mono">Active Question</span>
+                    <span className="text-xs font-extrabold text-[#465FE5] mt-0.5 block">
+                      {competitionState.status === 'in_progress' && competitionState.current_round_number === 2
+                        ? `Q${competitionState.current_question_number || 1} of 10`
+                        : '10 Qs Total'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] uppercase font-bold text-[#8E9BAE] font-mono">Shortlisted</span>
+                    <span className="text-xs font-extrabold text-[#16845B] mt-0.5 block font-mono">
+                      {qualifiedCount} Candidates
+                    </span>
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* Start Round 2 Button */}
+                  {!(competitionState.status === 'in_progress' && competitionState.current_round_number === 2) && !(competitionState.status === 'completed' || competitionState.status === 'results_published') && (
+                    <button
+                      onClick={() => handleStartRound(2)}
+                      disabled={isRoundActionLoading || qualifiedCount === 0}
+                      className="px-5 py-2.5 rounded-xl font-bold text-xs bg-[#16845B] hover:bg-[#116947] disabled:opacity-50 text-white shadow-soft transition-all flex items-center gap-2 cursor-pointer hover:-translate-y-0.5 active:translate-y-0"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>{isRoundActionLoading ? 'Starting...' : 'Start Round 2'}</span>
+                    </button>
+                  )}
+
+                  {/* Pause / Resume Controls */}
+                  {competitionState.status === 'in_progress' && competitionState.current_round_number === 2 && (
+                    <button
+                      onClick={handlePauseRound}
+                      disabled={isRoundActionLoading}
+                      className="px-4 py-2.5 rounded-xl font-bold text-xs bg-[#FFFBEB] hover:bg-[#FEF3C7] text-[#B7791F] border border-[#FDE68A] shadow-soft transition-all flex items-center gap-2 cursor-pointer"
+                    >
+                      <CirclePause className="w-3.5 h-3.5" />
+                      <span>Pause</span>
+                    </button>
+                  )}
+
+                  {competitionState.status === 'registration_closed' && competitionState.current_round_number === 2 && (
+                    <button
+                      onClick={handleResumeRound}
+                      disabled={isRoundActionLoading}
+                      className="px-4 py-2.5 rounded-xl font-bold text-xs bg-[#E8F5E9] hover:bg-[#C8E6C9] text-[#16845B] border border-[#C8E6C9] shadow-soft transition-all flex items-center gap-2 cursor-pointer"
+                    >
+                      <CirclePlay className="w-3.5 h-3.5" />
+                      <span>Resume</span>
+                    </button>
+                  )}
+
+                  {/* End Round 2 Button */}
+                  {(competitionState.current_round_number === 2 && (competitionState.status === 'in_progress' || competitionState.status === 'registration_closed')) && (
+                    <button
+                      onClick={() => handleEndRound(2)}
+                      disabled={isRoundActionLoading}
+                      className="px-4 py-2.5 rounded-xl font-bold text-xs bg-[#FEE2E2] hover:bg-[#FCA5A5] text-[#C2414A] border border-[#FCA5A5] shadow-soft transition-all flex items-center gap-2 cursor-pointer"
+                    >
+                      <Square className="w-3.5 h-3.5 fill-current" />
+                      <span>End Round 2</span>
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+        </div>
+      </div>
+
       {/* Control Strip: Registration Toggle & Cutoff Configuration */}
       <div className="bg-white border border-[#E7EAF0] rounded-2xl p-5 shadow-soft mb-8 flex flex-col md:flex-row md:items-center justify-between gap-5">
         
@@ -502,68 +1009,75 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </div>
 
-      {/* View Switcher Tabs: Live Exam Monitoring vs Official Standings */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
-        <div className="flex items-center gap-2">
+      {/* Notification Banner for Regenerated Access Code */}
+      {regSuccessMsg && (
+        <div className="p-4 rounded-2xl bg-[#E8F5E9] border border-[#C8E6C9] text-xs text-[#16845B] font-semibold flex items-center justify-between animate-fadeIn shadow-soft-sm">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-[#16845B]" />
+            <span>{regSuccessMsg}</span>
+          </div>
           <button
-            onClick={() => setAdminViewTab('monitoring')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-              adminViewTab === 'monitoring'
-                ? 'bg-[#172033] text-white shadow-soft'
-                : 'bg-white text-[#647084] hover:text-[#172033] border border-[#E7EAF0]'
-            }`}
+            onClick={() => setRegSuccessMsg(null)}
+            className="text-xs text-[#16845B] hover:underline font-bold cursor-pointer"
           >
-            <span className="w-2 h-2 rounded-full bg-[#16845B] animate-pulse" />
-            <Radio className="w-3.5 h-3.5 text-[#16845B]" />
-            <span>Live Exam Monitoring</span>
-            <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-mono font-bold">
-              {participants.length}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setAdminViewTab('roster')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-              adminViewTab === 'roster'
-                ? 'bg-[#172033] text-white shadow-soft'
-                : 'bg-white text-[#647084] hover:text-[#172033] border border-[#E7EAF0]'
-            }`}
-          >
-            <Trophy className="w-3.5 h-3.5 text-[#B7791F]" />
-            <span>Official Roster & Standings</span>
-            <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-mono font-bold">
-              {filteredLeaderboard.length}
-            </span>
+            Dismiss
           </button>
         </div>
+      )}
 
-        <div className="flex items-center gap-2 text-xs text-[#647084] self-end sm:self-auto">
-          <span className="w-2 h-2 rounded-full bg-[#465FE5] animate-ping" />
-          <span className="font-mono text-[11px] text-[#465FE5] font-semibold">Live Synchronized</span>
-          <button
-            onClick={() => refreshData()}
-            className="p-2 rounded-xl border border-[#E7EAF0] bg-white hover:bg-[#F8F9FC] text-[#172033] transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-bold shadow-soft-sm"
-            title="Force refresh database records"
-          >
-            <RefreshCw className="w-3 h-3 text-[#465FE5]" />
-            <span>Sync Cloud</span>
-          </button>
-        </div>
-      </div>
+      {/* Candidate Records Table Card */}
+      <div className="bg-white border border-[#E7EAF0] rounded-3xl shadow-soft overflow-hidden">
+        
+        {/* Table Header & Mode Switcher */}
+        <div className="p-5 border-b border-[#E7EAF0] flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            {/* View Switcher Tabs */}
+            <div className="flex items-center bg-[#F1F4F9] p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setActiveTab('students')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeTab === 'students'
+                    ? 'bg-white text-[#465FE5] shadow-soft-sm'
+                    : 'text-[#647084] hover:text-[#172033]'
+                }`}
+              >
+                <Key className="w-3.5 h-3.5" />
+                <span>Student Access Codes</span>
+                <span className="font-mono text-[10px] px-1.5 py-0.2 rounded-md bg-[#E9EDFF] text-[#465FE5]">
+                  {filteredParticipants.length}
+                </span>
+              </button>
 
-      {adminViewTab === 'monitoring' ? (
-        /* ==================== LIVE EXAM MONITORING VIEW ==================== */
-        <div className="bg-white border border-[#E7EAF0] rounded-3xl shadow-soft overflow-hidden">
-          {/* Header toolbar */}
-          <div className="p-5 border-b border-[#E7EAF0] flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <div className="w-2.5 h-2.5 rounded-full bg-[#16845B] animate-pulse" />
-              <h2 className="text-base font-bold text-[#172033]">
-                Real-Time Candidate Examination Fleet
-              </h2>
-              <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded-md bg-[#E8F5E9] text-[#16845B] border border-[#C8E6C9]">
-                {filteredParticipants.length} Connected
-              </span>
+              <button
+                type="button"
+                onClick={() => setActiveTab('leaderboard')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeTab === 'leaderboard'
+                    ? 'bg-white text-[#465FE5] shadow-soft-sm'
+                    : 'text-[#647084] hover:text-[#172033]'
+                }`}
+              >
+                <Trophy className="w-3.5 h-3.5" />
+                <span>Standings & Scoring</span>
+                <span className="font-mono text-[10px] px-1.5 py-0.2 rounded-md bg-[#F1F4F9] text-[#647084]">
+                  {filteredLeaderboard.length}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Search */}
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#8E9BAE]" />
+              <input
+                type="text"
+                placeholder="Search candidates or code..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-8 pr-3 py-1.5 rounded-xl border border-[#E7EAF0] text-xs text-[#172033] placeholder-[#8E9BAE] focus:outline-none focus:ring-1 focus:ring-[#465FE5]"
+              />
             </div>
 
             <div className="flex items-center gap-3 flex-wrap">
@@ -601,194 +1115,129 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
-          {/* Live Candidates Table */}
+        {/* Tab 1: Student Access Codes & Profile Management */}
+        {activeTab === 'students' ? (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="bg-[#F8F9FC] text-[10px] uppercase font-bold text-[#647084] border-b border-[#E7EAF0] font-mono tracking-wider">
                 <tr>
-                  <th className="py-3 px-4 sm:px-6">Candidate & Institution</th>
+                  <th className="py-3 px-4 sm:px-6">Student Name</th>
+                  <th className="py-3 px-4">School</th>
                   <th className="py-3 px-4 text-center">Class</th>
-                  <th className="py-3 px-4 text-center">Live Status</th>
-                  <th className="py-3 px-4 text-center">Current Progress</th>
-                  <th className="py-3 px-4 text-center">Fullscreen Compliance</th>
+                  <th className="py-3 px-4">Registration Date</th>
+                  <th className="py-3 px-4">Access Code</th>
+                  <th className="py-3 px-4 text-center">Participation Status</th>
                   <th className="py-3 px-4 sm:px-6 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E7EAF0]">
                 {filteredParticipants.length > 0 ? (
-                  filteredParticipants.map((part) => {
-                    const r1Attempt = competitionService.getActiveExamAttempt(part.id, 1);
-                    const r2Attempt = competitionService.getActiveExamAttempt(part.id, 2);
-                    const totalExits = competitionService.getParticipantFullscreenExitCount(part.id);
-                    const isRecentlyActive = part.last_ping_at && (Date.now() - new Date(part.last_ping_at).getTime() < 30000);
-
-                    // Compute live badge
-                    let statusBadge = (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#F1F4F9] text-[#647084] border border-[#E7EAF0] text-[11px] font-medium font-mono">
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#8E9BAE]" />
-                        Enrolled
-                      </span>
-                    );
-                    let progressText = 'Awaiting Start';
-
-                    if (r2Attempt && r2Attempt.isSubmitted) {
-                      statusBadge = (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#E9EDFF] text-[#465FE5] border border-[#C5D0FF] text-[11px] font-bold font-mono">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-[#465FE5]" />
-                          R2 Completed
-                        </span>
-                      );
-                      progressText = `Score: ${r2Attempt.score}/100`;
-                    } else if (r2Attempt) {
-                      statusBadge = (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#FEF3C7] text-[#B7791F] border border-[#FDE68A] text-[11px] font-bold font-mono">
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#B7791F] animate-pulse" />
-                          Round 2 In Progress
-                        </span>
-                      );
-                      progressText = `Question ${(r2Attempt.currentQuestionIndex || 0) + 1} of 10`;
-                    } else if (r1Attempt && r1Attempt.isSubmitted) {
-                      statusBadge = (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#E8F5E9] text-[#16845B] border border-[#C8E6C9] text-[11px] font-bold font-mono">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-[#16845B]" />
-                          R1 Submitted
-                        </span>
-                      );
-                      progressText = `Score: ${r1Attempt.score}/100 ${r1Attempt.isQualified ? '(Qualified)' : ''}`;
-                    } else if (r1Attempt) {
-                      statusBadge = (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#FEF3C7] text-[#B7791F] border border-[#FDE68A] text-[11px] font-bold font-mono">
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#B7791F] animate-pulse" />
-                          Exam In Progress
-                        </span>
-                      );
-                      progressText = `Question ${(r1Attempt.currentQuestionIndex || 0) + 1} of 10`;
-                    }
-
+                  filteredParticipants.map((p) => {
                     return (
-                      <tr key={part.id} className="hover:bg-[#F8F9FC] transition-colors">
+                      <tr key={p.id} className="hover:bg-[#F8F9FC] transition-colors">
                         <td className="py-3.5 px-4 sm:px-6">
-                          <div className="flex items-center gap-2">
-                            {isRecentlyActive ? (
-                              <span className="w-2 h-2 rounded-full bg-[#16845B] ring-2 ring-[#C8E6C9]" title="Candidate active right now" />
-                            ) : (
-                              <span className="w-2 h-2 rounded-full bg-[#CBD5E1]" title="Candidate idle or offline" />
-                            )}
-                            <div className="font-bold text-[#172033]">{part.student_name}</div>
+                          <div className="font-bold text-[#172033]">
+                            {p.student_name}
                           </div>
-                          <div className="text-[11px] text-[#647084] mt-0.5 font-medium pl-4">
-                            {part.school_name} &bull; <span className="font-mono text-[#8E9BAE]">Code: {part.access_code}</span>
+                          <div className="text-[11px] text-[#8E9BAE] font-mono">
+                            ID: {p.id.slice(0, 8)}
                           </div>
+                        </td>
+
+                        <td className="py-3.5 px-4 text-xs text-[#647084] font-medium">
+                          {p.school_name}
                         </td>
 
                         <td className="py-3.5 px-4 text-center">
                           <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded-md bg-[#F1F4F9] text-[#465FE5]">
-                            Class {part.student_class || '11th'}
+                            {p.student_class}
                           </span>
                         </td>
 
-                        <td className="py-3.5 px-4 text-center">
-                          {statusBadge}
+                        <td className="py-3.5 px-4 text-xs text-[#647084] font-mono">
+                          {p.created_at ? new Date(p.created_at).toLocaleString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          }) : 'Just now'}
                         </td>
 
-                        <td className="py-3.5 px-4 text-center font-mono font-semibold text-xs text-[#172033]">
-                          {progressText}
-                        </td>
-
-                        <td className="py-3.5 px-4 text-center">
-                          {totalExits > 0 ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#FEF3C7] text-[#B7791F] border border-[#FDE68A] font-mono">
-                              <ShieldAlert className="w-3 h-3" />
-                              {totalExits} Exits
+                        {/* Access Code Badge with Copy button */}
+                        <td className="py-3.5 px-4">
+                          <div className="inline-flex items-center gap-1.5 bg-[#E9EDFF] border border-[#C5D2FB] px-2.5 py-1 rounded-lg">
+                            <span className="font-mono font-black text-xs text-[#465FE5] tracking-wider select-all">
+                              {p.access_code}
                             </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-[#E8F5E9] text-[#16845B] border border-[#C8E6C9] font-mono">
-                              <CheckCircle2 className="w-3 h-3" />
-                              100% Compliant
-                            </span>
-                          )}
+                            <button
+                              type="button"
+                              onClick={() => handleCopyCode(p.access_code)}
+                              title="Copy Access Code"
+                              className="p-1 text-[#465FE5] hover:text-[#384EC9] transition-colors rounded cursor-pointer"
+                            >
+                              {copiedCode === p.access_code ? (
+                                <Check className="w-3.5 h-3.5 text-[#16845B]" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          </div>
                         </td>
 
+                        {/* Participation Status */}
+                        <td className="py-3.5 px-4 text-center">
+                          <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full font-mono ${
+                            p.status?.includes('Completed') || p.status?.includes('Qualified')
+                              ? 'bg-[#E8F5E9] text-[#16845B] border border-[#C8E6C9]'
+                              : p.status?.includes('In Progress')
+                              ? 'bg-[#FEF3C7] text-[#B7791F] border border-[#FDE68A]'
+                              : 'bg-[#F1F4F9] text-[#647084] border border-[#E7EAF0]'
+                          }`}>
+                            {p.status || 'Registered'}
+                          </span>
+                        </td>
+
+                        {/* Actions */}
                         <td className="py-3.5 px-4 sm:px-6 text-right">
-                          <button
-                            onClick={() => {
-                              setAuditParticipantId(part.id);
-                              setAuditStudentName(part.student_name);
-                            }}
-                            className="px-3 py-1.5 rounded-lg border border-[#E7EAF0] text-xs font-bold text-[#465FE5] hover:bg-[#E9EDFF] transition-colors inline-flex items-center gap-1 cursor-pointer"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                            <span>Audit Candidate</span>
-                          </button>
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleRegenerateAccessCode(p.id, p.student_name)}
+                              disabled={regeneratingId === p.id}
+                              title="Regenerate new Access Code for this student"
+                              className="px-2.5 py-1.5 rounded-lg border border-[#E7EAF0] text-xs font-bold text-[#B7791F] hover:bg-[#FEF3C7] transition-colors inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${regeneratingId === p.id ? 'animate-spin' : ''}`} />
+                              <span>{regeneratingId === p.id ? 'Regenerating...' : 'Regenerate Code'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAuditParticipantId(p.id);
+                                setAuditStudentName(p.student_name);
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg border border-[#E7EAF0] text-xs font-bold text-[#465FE5] hover:bg-[#E9EDFF] transition-colors inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Audit</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
                   })
                 ) : (
                   <tr>
-                    <td colSpan={6} className="py-10 text-center text-[#8E9BAE] text-xs">
-                      No candidates currently registered. Candidate registrations will appear here automatically.
+                    <td colSpan={7} className="py-10 text-center text-[#8E9BAE] text-xs">
+                      No registered candidates match the active search and filter criteria.
                     </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
-        </div>
-      ) : (
-        /* ==================== OFFICIAL ROSTER & LEADERBOARD VIEW ==================== */
-        <div className="bg-white border border-[#E7EAF0] rounded-3xl shadow-soft overflow-hidden">
-          
-          {/* Table Filter Toolbar */}
-          <div className="p-5 border-b border-[#E7EAF0] flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-bold text-[#172033]">
-                Official Examination Roster & Standings
-              </h2>
-              <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded-md bg-[#F1F4F9] text-[#647084]">
-                {filteredLeaderboard.length} Candidates
-              </span>
-            </div>
-
-            <div className="flex items-center gap-3 flex-wrap">
-              {/* Search */}
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#8E9BAE]" />
-                <input
-                  type="text"
-                  placeholder="Search candidates..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-8 pr-3 py-1.5 rounded-xl border border-[#E7EAF0] text-xs text-[#172033] placeholder-[#8E9BAE] focus:outline-none focus:ring-1 focus:ring-[#465FE5]"
-                />
-              </div>
-
-              {/* School Filter */}
-              <select
-                value={selectedSchool}
-                onChange={(e) => setSelectedSchool(e.target.value)}
-                className="px-3 py-1.5 rounded-xl border border-[#E7EAF0] text-xs text-[#172033] bg-white focus:outline-none focus:ring-1 focus:ring-[#465FE5]"
-              >
-                <option value="all">All Schools</option>
-                {uniqueSchools.map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-
-              {/* Class Filter */}
-              <select
-                value={selectedClass}
-                onChange={(e) => setSelectedClass(e.target.value)}
-                className="px-3 py-1.5 rounded-xl border border-[#E7EAF0] text-xs text-[#172033] bg-white focus:outline-none focus:ring-1 focus:ring-[#465FE5]"
-              >
-                <option value="all">All Classes</option>
-                <option value="11th">Class 11th</option>
-                <option value="12th">Class 12th</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Candidate Table */}
+        ) : (
+          /* Tab 2: Standings & Scoring Roster */
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="bg-[#F8F9FC] text-[10px] uppercase font-bold text-[#647084] border-b border-[#E7EAF0] font-mono tracking-wider">
@@ -859,6 +1308,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         {/* Action: Audit Details Modal */}
                         <td className="py-3.5 px-4 sm:px-6 text-right">
                           <button
+                            type="button"
                             onClick={() => {
                               setAuditParticipantId(entry.participant_id);
                               setAuditStudentName(entry.student_name);
@@ -882,8 +1332,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </tbody>
             </table>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Audit Modal */}
       <StudentAuditModal
