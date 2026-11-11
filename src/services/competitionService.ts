@@ -86,6 +86,116 @@ class CompetitionService {
     this.initStorage();
     this.setupBroadcast();
     this.syncServerTime();
+    this.syncStateFromSupabase();
+
+    if (typeof window !== 'undefined') {
+      setInterval(() => {
+        this.syncStateFromSupabase();
+      }, 1500);
+      window.addEventListener('focus', () => {
+        this.syncStateFromSupabase();
+      });
+    }
+  }
+
+  /**
+   * Fast HTTP synchronization of live competition state across all 60 physical devices.
+   */
+  public async syncStateFromSupabase(): Promise<void> {
+    if (!isSupabaseConfigured() || !supabase) return;
+    try {
+      const { data, error } = await supabase.rpc('get_competition_state_rpc');
+      if (!error && data && data.success) {
+        let changed = false;
+        if (this.localState.status !== data.status) {
+          this.localState.status = data.status;
+          changed = true;
+        }
+        if (this.localState.current_round_number !== data.current_round_number) {
+          this.localState.current_round_number = data.current_round_number;
+          changed = true;
+        }
+        if (data.round_1_qualifying_score && this.localState.round_1_qualifying_score !== data.round_1_qualifying_score) {
+          this.localState.round_1_qualifying_score = data.round_1_qualifying_score;
+          changed = true;
+        }
+        if (data.duration_per_question) {
+          this.localState.duration_per_question = data.duration_per_question;
+        }
+        if (data.server_time) {
+          this.clockOffsetMs = data.server_time - Date.now();
+        }
+        if (changed) {
+          this.persistLocal();
+          this.notifyListeners();
+        }
+      } else {
+        const { data: comp } = await supabase.from('competitions').select('*').limit(1).maybeSingle();
+        if (comp) {
+          let changed = false;
+          if (this.localState.status !== comp.status) {
+            this.localState.status = comp.status;
+            changed = true;
+          }
+          if (this.localState.current_round_number !== comp.current_round_number) {
+            this.localState.current_round_number = comp.current_round_number;
+            changed = true;
+          }
+          if (changed) {
+            this.persistLocal();
+            this.notifyListeners();
+          }
+        }
+      }
+    } catch {
+      // Quiet fail on network transient
+    }
+  }
+
+  /**
+   * Fetch all registered students directly from Supabase for Organizer Dashboard.
+   */
+  public async getAdminParticipantsAsync(): Promise<Participant[]> {
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        const { data, error } = await supabase.rpc('admin_get_participants');
+        if (!error && Array.isArray(data) && data.length > 0) {
+          this.participants = data.map((p: any) => ({
+            id: p.id,
+            competition_id: p.competition_id,
+            student_name: p.student_name,
+            school_name: p.school_name,
+            student_class: p.student_class,
+            access_code: p.access_code,
+            is_active: true,
+            last_ping_at: new Date().toISOString(),
+            created_at: p.created_at || new Date().toISOString(),
+          }));
+          this.persistLocal();
+          return this.participants;
+        } else {
+          const { data: partData } = await supabase.from('participants').select('*');
+          if (partData && partData.length > 0) {
+            this.participants = partData.map((p: any) => ({
+              id: p.id,
+              competition_id: p.competition_id,
+              student_name: p.student_name,
+              school_name: p.school_name,
+              student_class: p.student_class,
+              access_code: p.access_code,
+              is_active: true,
+              last_ping_at: new Date().toISOString(),
+              created_at: p.created_at || new Date().toISOString(),
+            }));
+            this.persistLocal();
+            return this.participants;
+          }
+        }
+      } catch (err) {
+        console.warn('Error fetching participants from Supabase:', err);
+      }
+    }
+    return [...this.participants];
   }
 
   private initStorage() {
@@ -673,18 +783,45 @@ class CompetitionService {
   ): Question[] {
     const attempt = this.getActiveExamAttempt(participantId, roundNumber);
     const roundQuestions = CLIENT_QUESTIONS.filter((q) => q.roundNumber === roundNumber);
+    
+    let baseList: Question[];
     if (!attempt || !attempt.questionSequence || attempt.questionSequence.length === 0) {
-      return roundQuestions;
+      baseList = roundQuestions;
+    } else {
+      const map = new Map<string, Question>();
+      roundQuestions.forEach((q) => {
+        map.set(q.id, q);
+      });
+      baseList = attempt.questionSequence
+        .map((id) => map.get(id))
+        .filter((q): q is Question => Boolean(q));
     }
 
-    const map = new Map<string, Question>();
-    roundQuestions.forEach((q) => {
-      map.set(q.id, q);
-    });
+    // Deterministically shuffle answer options independently for each student
+    const labels: Array<'A' | 'B' | 'C' | 'D'> = ['A', 'B', 'C', 'D'];
+    return baseList.map((q) => {
+      // Deterministic hash seed based on participant and question ID
+      const seedStr = `${participantId || 'default'}_${q.id}`;
+      let seed = 0;
+      for (let i = 0; i < seedStr.length; i++) {
+        seed = (seed * 31 + seedStr.charCodeAt(i)) >>> 0;
+      }
+      const shuffledOptions = [...q.options];
+      for (let i = shuffledOptions.length - 1; i > 0; i--) {
+        seed = (seed * 1664525 + 1013904223) >>> 0;
+        const j = seed % (i + 1);
+        [shuffledOptions[i], shuffledOptions[j]] = [shuffledOptions[j], shuffledOptions[i]];
+      }
 
-    return attempt.questionSequence
-      .map((id) => map.get(id))
-      .filter((q): q is Question => Boolean(q));
+      const optionsWithRelabeled = shuffledOptions.map((opt, idx) => ({
+        ...opt,
+        label: labels[idx] || opt.label,
+      }));
+      return {
+        ...q,
+        options: optionsWithRelabeled,
+      };
+    });
   }
 
   public getActiveExamAttempt(
@@ -1092,6 +1229,16 @@ class CompetitionService {
     this.logAdminAction('UPDATE_QUALIFYING_CUTOFF', 'admin', { newCutoff: score });
     this.persistLocal();
     this.notifyListeners();
+
+    if (isSupabaseConfigured() && supabase) {
+      Promise.resolve(
+        supabase.rpc('admin_update_competition_state', {
+          p_status: this.localState.status,
+          p_round_number: this.localState.current_round_number || 1,
+          p_cutoff: score,
+        })
+      ).then(() => {}).catch(() => {});
+    }
   }
 
   public getQualifyingScore(): number {
@@ -1386,10 +1533,22 @@ class CompetitionService {
   // ADMIN COMPETITION ORCHESTRATION
   // ==========================================
 
-  public setStatus(newStatus: CompetitionStatus) {
+  public async setStatus(newStatus: CompetitionStatus) {
     this.localState.status = newStatus;
     this.persistLocal();
     this.notifyListeners();
+
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        await supabase.rpc('admin_update_competition_state', {
+          p_status: newStatus,
+          p_round_number: this.localState.current_round_number || 1,
+          p_cutoff: this.localState.round_1_qualifying_score || 60,
+        });
+      } catch (err) {
+        console.warn('Error syncing status to Supabase:', err);
+      }
+    }
   }
 
   public setAutoAdvance(enabled: boolean) {
@@ -1398,7 +1557,7 @@ class CompetitionService {
     this.notifyListeners();
   }
 
-  public startRound(roundNumber: 1 | 2) {
+  public async startRound(roundNumber: 1 | 2) {
     const roundQuestions = CLIENT_QUESTIONS.filter((q) => q.roundNumber === roundNumber);
     if (roundQuestions.length === 0) return;
 
@@ -1420,6 +1579,18 @@ class CompetitionService {
     this.persistLocal();
     this.notifyListeners();
     this.scheduleAutoAdvance(durationSeconds);
+
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        await supabase.rpc('admin_update_competition_state', {
+          p_status: 'in_progress',
+          p_round_number: roundNumber,
+          p_cutoff: this.localState.round_1_qualifying_score || 60,
+        });
+      } catch (err) {
+        console.warn('Error syncing startRound to Supabase:', err);
+      }
+    }
   }
 
   public releaseQuestion(questionId: string) {

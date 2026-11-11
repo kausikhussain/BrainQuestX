@@ -90,6 +90,29 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({
 
   const isRound2Eligible = activeStudent ? competitionService.isStudentQualifiedForRound2(activeStudent.id) : false;
 
+  // Synchronized live competition start across all 60 computers
+  useEffect(() => {
+    if (!activeStudent) return;
+
+    if (competitionState.status === 'in_progress') {
+      const liveRound = (competitionState.current_round_number as 1 | 2) || 1;
+      const attempt = competitionService.getActiveExamAttempt(activeStudent.id, liveRound);
+
+      if (liveRound === 2) {
+        const isQualified = competitionService.isStudentQualifiedForRound2(activeStudent.id);
+        if (isQualified && (!attempt || !attempt.isSubmitted)) {
+          setActiveRound(2);
+          setSubView('exam');
+        }
+      } else if (liveRound === 1) {
+        if (!attempt || !attempt.isSubmitted) {
+          setActiveRound(1);
+          setSubView('exam');
+        }
+      }
+    }
+  }, [competitionState.status, competitionState.current_round_number, activeStudent]);
+
   const handleStartRound2 = () => {
     setActiveRound(2);
     setSubView('instructions');

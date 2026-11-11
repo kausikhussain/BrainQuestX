@@ -71,7 +71,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Load telemetry data
   const refreshData = async () => {
-    const parts = competitionService.getAllParticipants();
+    const parts = await competitionService.getAdminParticipantsAsync();
     setParticipants(parts);
     const lb = await competitionService.getLeaderboard();
     setLeaderboard(lb);

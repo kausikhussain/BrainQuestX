@@ -41,9 +41,12 @@ CREATE TABLE IF NOT EXISTS public.competitions (
     question_deadline TIMESTAMPTZ,
     duration_per_question INT NOT NULL DEFAULT 20,
     auto_advance BOOLEAN NOT NULL DEFAULT true,
+    round_1_qualifying_score INT NOT NULL DEFAULT 60,
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
+
+ALTER TABLE public.competitions ADD COLUMN IF NOT EXISTS round_1_qualifying_score INT NOT NULL DEFAULT 60;
 
 -- Rounds Table
 CREATE TABLE IF NOT EXISTS public.rounds (
@@ -1197,6 +1200,101 @@ BEGIN
 END;
 $$;
 
+-- Admin Update Competition State (Start Round 1, Start Round 2, Pause, Complete)
+CREATE OR REPLACE FUNCTION public.admin_update_competition_state(
+    p_status TEXT,
+    p_round_number INT DEFAULT 1,
+    p_cutoff INT DEFAULT 60
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+    v_comp RECORD;
+BEGIN
+    SELECT * INTO v_comp FROM public.competitions ORDER BY created_at ASC LIMIT 1;
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Competition not found');
+    END IF;
+
+    UPDATE public.competitions
+    SET 
+        status = COALESCE(p_status, status),
+        current_round_number = COALESCE(p_round_number, current_round_number),
+        round_1_qualifying_score = COALESCE(p_cutoff, round_1_qualifying_score),
+        updated_at = clock_timestamp()
+    WHERE id = v_comp.id
+    RETURNING * INTO v_comp;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'status', v_comp.status,
+        'current_round_number', v_comp.current_round_number,
+        'round_1_qualifying_score', v_comp.round_1_qualifying_score
+    );
+END;
+$$;
+
+-- Get Competition State RPC (Fast State Sync for all 60 computers)
+CREATE OR REPLACE FUNCTION public.get_competition_state_rpc()
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+    v_comp RECORD;
+BEGIN
+    SELECT * INTO v_comp FROM public.competitions ORDER BY created_at ASC LIMIT 1;
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Competition not found');
+    END IF;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'id', v_comp.id,
+        'code', v_comp.code,
+        'title', v_comp.title,
+        'status', v_comp.status,
+        'current_round_number', v_comp.current_round_number,
+        'duration_per_question', v_comp.duration_per_question,
+        'auto_advance', v_comp.auto_advance,
+        'round_1_qualifying_score', COALESCE(v_comp.round_1_qualifying_score, 60),
+        'server_time', (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT
+    );
+END;
+$$;
+
+-- Admin Get All Participants RPC (Real-Time Student Check-in for Organizer Dashboard)
+CREATE OR REPLACE FUNCTION public.admin_get_participants()
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+    v_result JSONB;
+BEGIN
+    SELECT COALESCE(jsonb_agg(
+        jsonb_build_object(
+            'id', p.id,
+            'competition_id', p.competition_id,
+            'access_code', p.access_code,
+            'student_name', p.student_name,
+            'school_name', p.school_name,
+            'student_class', p.student_class,
+            'created_at', p.created_at
+        ) ORDER BY p.created_at ASC
+    ), '[]'::jsonb)
+    INTO v_result
+    FROM public.participants p;
+
+    RETURN v_result;
+END;
+$$;
+
 -- Permissions Grants
 GRANT EXECUTE ON FUNCTION public.get_server_time() TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.register_participant(TEXT, TEXT, TEXT, TEXT) TO anon, authenticated, service_role;
@@ -1209,3 +1307,6 @@ GRANT EXECUTE ON FUNCTION public.submit_student_answer(UUID, TEXT, TEXT, TEXT) T
 GRANT EXECUTE ON FUNCTION public.record_fullscreen_event(UUID, TEXT, INT, TEXT, BIGINT) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.get_leaderboard(UUID) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.verify_admin_role_rpc() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.admin_update_competition_state(TEXT, INT, INT) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.get_competition_state_rpc() TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.admin_get_participants() TO anon, authenticated, service_role;

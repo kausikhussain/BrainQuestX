@@ -151,20 +151,13 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
     };
   }, [questionTimer, isSubmitting, handleAutoAdvance]);
 
-  // Full-screen monitoring effect
+  // Full-screen monitoring (Non-blocking: student is never locked out during exam)
   useEffect(() => {
     const handleFullscreenChange = () => {
       const isCurrentlyFullscreen = !!(
         document.fullscreenElement || (document as any).webkitFullscreenElement
       );
-
-      if (!isCurrentlyFullscreen && !attempt.isSubmitted && !isSubmitting) {
-        setIsFullscreenExited(true);
-        competitionService.recordFullscreenExit(participant.id, roundNumber);
-      } else if (isCurrentlyFullscreen && isFullscreenExited) {
-        setIsFullscreenExited(false);
-        competitionService.recordFullscreenReturn(participant.id, roundNumber);
-      }
+      setIsFullscreenExited(!isCurrentlyFullscreen);
     };
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -174,7 +167,7 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
     };
-  }, [participant.id, roundNumber, attempt.isSubmitted, isSubmitting, isFullscreenExited]);
+  }, []);
 
   const handleReturnToFullscreen = async () => {
     try {
@@ -187,7 +180,6 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
       console.warn('Could not re-enter fullscreen:', err);
     }
     setIsFullscreenExited(false);
-    competitionService.recordFullscreenReturn(participant.id, roundNumber);
   };
 
   // Answer selection handler
@@ -273,7 +265,7 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
   // Keyboard shortcuts: A, B, C, D or 1, 2, 3, 4
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (isSubmitting || isSubmitModalOpen || isFullscreenExited) return;
+      if (isSubmitting || isSubmitModalOpen) return;
 
       const key = e.key.toUpperCase();
       let optIdx = -1;
@@ -336,33 +328,6 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col min-h-[calc(100vh-8rem)]">
-      {/* ==================== FULL-SCREEN EXIT WARNING OVERLAY ==================== */}
-      {isFullscreenExited && (
-        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 sm:p-8 text-center shadow-2xl border border-slate-200 animate-scaleUp">
-            <div className="w-14 h-14 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-4">
-              <ShieldAlert className="w-8 h-8" />
-            </div>
-            <h2 className="text-xl font-extrabold text-slate-900 mb-2">
-              Full-Screen Mode Exited
-            </h2>
-            <p className="text-sm text-slate-600 leading-relaxed mb-4">
-              Examination regulations require full-screen mode to remain active. This exit event has been recorded in candidate audit telemetry with timestamps.
-            </p>
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 mb-6 font-medium">
-              Note: The 20-second per-question timer continues counting down in the background. Return to full screen immediately.
-            </div>
-            <button
-              onClick={handleReturnToFullscreen}
-              className="w-full py-3.5 px-6 rounded-xl font-bold text-sm bg-indigo-600 hover:bg-indigo-700 text-white shadow-soft transition-all flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Maximize2 className="w-4 h-4" />
-              <span>Return to Full Screen</span>
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* ==================== TOP EXAMINATION HEADER ==================== */}
       <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-soft mb-6">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
