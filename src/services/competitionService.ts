@@ -156,9 +156,12 @@ class CompetitionService {
    * Fetch all registered students directly from Supabase for Organizer Dashboard.
    */
   public async getAdminParticipantsAsync(): Promise<Participant[]> {
+    const adminToken = this.getActiveAdminToken();
     if (isSupabaseConfigured() && supabase) {
       try {
-        const { data, error } = await supabase.rpc('admin_get_participants');
+        const { data, error } = await supabase.rpc('admin_get_participants', {
+          p_admin_token: adminToken,
+        });
         if (!error && Array.isArray(data) && data.length > 0) {
           this.participants = data.map((p: any) => ({
             id: p.id,
@@ -196,6 +199,17 @@ class CompetitionService {
       }
     }
     return [...this.participants];
+  }
+
+  public getActiveAdminToken(): string | null {
+    if (typeof window !== 'undefined') {
+      return (
+        sessionStorage.getItem('quizmania_admin_token') ||
+        localStorage.getItem('quizmania_admin_session_token') ||
+        null
+      );
+    }
+    return null;
   }
 
   private initStorage() {
@@ -1314,6 +1328,7 @@ class CompetitionService {
           p_status: this.localState.status,
           p_round_number: this.localState.current_round_number || 1,
           p_cutoff: score,
+          p_admin_token: adminToken || this.getActiveAdminToken(),
         })
       ).then(() => {}).catch(() => {});
     }
@@ -1623,6 +1638,7 @@ class CompetitionService {
           p_status: newStatus,
           p_round_number: this.localState.current_round_number || 1,
           p_cutoff: this.localState.round_1_qualifying_score || 60,
+          p_admin_token: this.getActiveAdminToken(),
         });
       } catch (err) {
         console.warn('Error syncing status to Supabase:', err);
@@ -1665,6 +1681,7 @@ class CompetitionService {
           p_status: 'in_progress',
           p_round_number: roundNumber,
           p_cutoff: this.localState.round_1_qualifying_score || 60,
+          p_admin_token: this.getActiveAdminToken(),
         });
       } catch (err) {
         console.warn('Error syncing startRound to Supabase:', err);
@@ -1797,7 +1814,60 @@ class CompetitionService {
       };
     }
 
-    // 1. Authoritative Institutional Administrator Authentication
+    // 1. Production Mode: Authenticate through Supabase (Server-Side RPC & Auth)
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        // Try server-side PostgreSQL administrator authentication via RPC (username/password with bcrypt)
+        const { data: rpcData, error: rpcError } = await supabase.rpc('admin_login_rpc', {
+          p_username: cleanUser,
+          p_password: cleanPass,
+        });
+
+        if (!rpcError && rpcData && rpcData.success) {
+          delete this.failedLoginAttempts[cleanUser];
+          const token = rpcData.token;
+          const expiresAt = rpcData.expires_at || (now + 12 * 60 * 60 * 1000);
+
+          const session: AdminSession = {
+            token,
+            role: 'ADMIN',
+            username: cleanUser,
+            createdAt: now,
+            expiresAt,
+          };
+
+          this.adminSessions[token] = session;
+          this.persistLocal();
+          try {
+            sessionStorage.setItem('quizmania_admin_token', token);
+            localStorage.setItem('quizmania_admin_session_token', token);
+          } catch {}
+          this.logAdminAction('ADMIN_LOGIN_SUCCESS', cleanUser, { auth: 'SUPABASE_RPC' });
+
+          return {
+            success: true,
+            token,
+            role: 'ADMIN',
+            expiresAt,
+          };
+        }
+
+        // If the RPC returned an explicit rejection (invalid credentials), record attempt & reject
+        if (rpcData && !rpcData.success) {
+          attemptRecord.count += 1;
+          if (attemptRecord.count >= 5) {
+            attemptRecord.lockedUntil = now + 60000;
+          }
+          this.failedLoginAttempts[cleanUser] = attemptRecord;
+          this.logAdminAction('ADMIN_LOGIN_FAILED', cleanUser, { reason: rpcData.error || 'Invalid credentials' });
+          return { success: false, error: rpcData.error || 'Invalid administrator credentials. Access denied.' };
+        }
+      } catch (err: any) {
+        console.warn('Supabase admin_login_rpc check:', err?.message);
+      }
+    }
+
+    // 2. Authoritative Institutional Administrator Authentication
     const validMasterUsers = ['admin', 'organizer', 'director', 'kausik'];
     const isMasterUser = validMasterUsers.includes(cleanUser) || cleanUser.startsWith('admin') || cleanUser.endsWith('@quizmania.local');
 
@@ -1837,6 +1907,7 @@ class CompetitionService {
       this.adminSessions[token] = session;
       this.persistLocal();
       try {
+        sessionStorage.setItem('quizmania_admin_token', token);
         localStorage.setItem('quizmania_admin_session_token', token);
       } catch {}
       this.logAdminAction('ADMIN_LOGIN_SUCCESS', cleanUser, { auth: 'MASTER_AUTHORITATIVE' });
@@ -1849,7 +1920,7 @@ class CompetitionService {
       };
     }
 
-    // 2. Supabase Cloud Auth Integration (For remote custom admin accounts)
+    // 3. Supabase Cloud Auth Integration (For remote custom admin accounts)
     if (isSupabaseConfigured() && supabase) {
       try {
         const email = cleanUser.includes('@') ? cleanUser : `${cleanUser}@quizmania.local`;
@@ -1859,32 +1930,40 @@ class CompetitionService {
         });
 
         if (!authError && authData.session) {
-          delete this.failedLoginAttempts[cleanUser];
-          const token = authData.session.access_token;
-          const expiresAt = now + 4 * 60 * 60 * 1000;
+          const { data: roleData } = await supabase.rpc('verify_admin_role_rpc');
+          if (roleData?.is_admin) {
+            delete this.failedLoginAttempts[cleanUser];
+            const token = authData.session.access_token;
+            const expiresAt = now + 4 * 60 * 60 * 1000;
 
-          const session: AdminSession = {
-            token,
-            role: 'ADMIN',
-            username: cleanUser,
-            createdAt: now,
-            expiresAt,
-          };
+            const session: AdminSession = {
+              token,
+              role: 'ADMIN',
+              username: cleanUser,
+              createdAt: now,
+              expiresAt,
+            };
 
-          this.adminSessions[token] = session;
-          this.persistLocal();
-          try {
-            localStorage.setItem('quizmania_admin_session_token', token);
-          } catch {}
-          this.logAdminAction('ADMIN_LOGIN_SUCCESS', cleanUser, { auth: 'SUPABASE_AUTH' });
+            this.adminSessions[token] = session;
+            this.persistLocal();
+            try {
+              sessionStorage.setItem('quizmania_admin_token', token);
+              localStorage.setItem('quizmania_admin_session_token', token);
+            } catch {}
+            this.logAdminAction('ADMIN_LOGIN_SUCCESS', cleanUser, { auth: 'SUPABASE_AUTH' });
 
-          return {
-            success: true,
-            token,
-            role: 'ADMIN',
-            expiresAt,
-          };
+            return {
+              success: true,
+              token,
+              role: 'ADMIN',
+              expiresAt,
+            };
+          }
         }
+      } catch (err: any) {
+        console.warn('Supabase auth attempt error:', err?.message);
+      }
+    }
       } catch (err: any) {
         console.warn('Supabase auth attempt error:', err?.message);
       }
@@ -1913,6 +1992,17 @@ class CompetitionService {
   }
 
   public logoutAdmin(token: string): boolean {
+    if (isSupabaseConfigured() && supabase && token) {
+      Promise.resolve(
+        supabase.rpc('admin_logout_rpc', { p_token: token })
+      ).catch(() => {});
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.removeItem('quizmania_admin_token');
+        localStorage.removeItem('quizmania_admin_session_token');
+      } catch {}
+    }
     if (this.adminSessions[token]) {
       const username = this.adminSessions[token].username;
       delete this.adminSessions[token];
