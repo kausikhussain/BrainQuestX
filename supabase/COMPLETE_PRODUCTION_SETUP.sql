@@ -462,7 +462,7 @@ CREATE OR REPLACE FUNCTION public.register_participant(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, auth, pg_temp
+SET search_path = public, auth, extensions, pg_temp
 AS $$
 DECLARE
     v_comp RECORD;
@@ -557,7 +557,7 @@ CREATE OR REPLACE FUNCTION public.authenticate_participant(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, auth, pg_temp
+SET search_path = public, auth, extensions, pg_temp
 AS $$
 DECLARE
     v_participant RECORD;
@@ -597,7 +597,7 @@ CREATE OR REPLACE FUNCTION public.start_or_restore_attempt(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, auth, pg_temp
+SET search_path = public, auth, extensions, pg_temp
 AS $$
 DECLARE
     v_participant RECORD;
@@ -708,7 +708,7 @@ CREATE OR REPLACE FUNCTION public.start_question_timer_rpc(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, auth, pg_temp
+SET search_path = public, auth, extensions, pg_temp
 AS $$
 DECLARE
     v_participant RECORD;
@@ -780,7 +780,7 @@ CREATE OR REPLACE FUNCTION public.save_attempt_answer(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, auth, pg_temp
+SET search_path = public, auth, extensions, pg_temp
 AS $$
 DECLARE
     v_participant RECORD;
@@ -861,7 +861,7 @@ CREATE OR REPLACE FUNCTION public.submit_exam_attempt_rpc(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, auth, pg_temp
+SET search_path = public, auth, extensions, pg_temp
 AS $$
 DECLARE
     v_participant RECORD;
@@ -997,7 +997,7 @@ CREATE OR REPLACE FUNCTION public.submit_student_answer(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, auth, pg_temp
+SET search_path = public, auth, extensions, pg_temp
 AS $$
 DECLARE
     v_comp RECORD;
@@ -1065,7 +1065,7 @@ CREATE OR REPLACE FUNCTION public.record_fullscreen_event(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, auth, pg_temp
+SET search_path = public, auth, extensions, pg_temp
 AS $$
 DECLARE
     v_participant RECORD;
@@ -1178,7 +1178,7 @@ CREATE OR REPLACE FUNCTION public.verify_admin_role_rpc()
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, auth, pg_temp
+SET search_path = public, auth, extensions, pg_temp
 AS $$
 DECLARE
     v_role RECORD;
@@ -1209,7 +1209,7 @@ CREATE OR REPLACE FUNCTION public.admin_update_competition_state(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, auth, pg_temp
+SET search_path = public, auth, extensions, pg_temp
 AS $$
 DECLARE
     v_comp RECORD;
@@ -1242,7 +1242,7 @@ CREATE OR REPLACE FUNCTION public.get_competition_state_rpc()
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, auth, pg_temp
+SET search_path = public, auth, extensions, pg_temp
 AS $$
 DECLARE
     v_comp RECORD;
@@ -1272,7 +1272,7 @@ CREATE OR REPLACE FUNCTION public.admin_get_participants()
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, auth, pg_temp
+SET search_path = public, auth, extensions, pg_temp
 AS $$
 DECLARE
     v_result JSONB;

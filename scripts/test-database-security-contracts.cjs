@@ -55,6 +55,7 @@ const regPartMatch = sqlContent.match(/CREATE OR REPLACE FUNCTION public\.regist
 assert(regPartMatch !== null, 'Found register_participant function definition');
 const regPartBody = regPartMatch[0];
 assert(regPartBody.includes('is_duplicate'), 'register_participant returns is_duplicate flag');
+assert(regPartMatch[0].includes('extensions'), 'register_participant includes extensions schema in search_path for pgcrypto resolution');
 assert(
   regPartBody.includes("'success', false") || regPartBody.includes('"success": false') || regPartBody.includes("'is_duplicate', true"),
   'Duplicate registration halts with is_duplicate: true and success: false'
