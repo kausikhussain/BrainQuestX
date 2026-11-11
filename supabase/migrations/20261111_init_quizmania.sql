@@ -54,7 +54,7 @@ ON CONFLICT (code) DO NOTHING;
 -- 2. ROUNDS TABLE
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.rounds (
-    id TEXT PRIMARY KEY, -- e.g. 'round-1', 'round-2'
+    id TEXT PRIMARY KEY,
     competition_id UUID REFERENCES public.competitions(id) ON DELETE CASCADE,
     round_number INT NOT NULL,
     title TEXT NOT NULL,
@@ -107,7 +107,7 @@ ON CONFLICT (id) DO NOTHING;
 -- 3. QUESTIONS TABLE
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.questions (
-    id TEXT PRIMARY KEY, -- e.g. 'r1-q1'
+    id TEXT PRIMARY KEY,
     round_id TEXT REFERENCES public.rounds(id) ON DELETE CASCADE,
     round_number INT NOT NULL,
     question_number INT NOT NULL,
@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS public.questions (
 -- 4. QUESTION OPTIONS TABLE (Protected answer keys)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.question_options (
-    id TEXT PRIMARY KEY, -- e.g. 'r1-q1-a'
+    id TEXT PRIMARY KEY,
     question_id TEXT REFERENCES public.questions(id) ON DELETE CASCADE,
     label VARCHAR(1) NOT NULL CHECK (label IN ('A', 'B', 'C', 'D')),
     text TEXT NOT NULL,
@@ -130,16 +130,16 @@ CREATE TABLE IF NOT EXISTS public.question_options (
     UNIQUE (question_id, label)
 );
 
--- Index for instant option lookup
 CREATE INDEX IF NOT EXISTS idx_options_question ON public.question_options(question_id);
 
 -- ----------------------------------------------------------------------------
--- 5. PARTICIPANTS TABLE
+-- 5. PARTICIPANTS TABLE (Cryptographic Session Token & Identity)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.participants (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     competition_id UUID REFERENCES public.competitions(id) ON DELETE CASCADE,
     access_code TEXT NOT NULL UNIQUE,
+    session_token TEXT NOT NULL DEFAULT encode(gen_random_bytes(32), 'hex'),
     student_name TEXT NOT NULL,
     school_name TEXT NOT NULL,
     student_class TEXT NOT NULL CHECK (student_class IN ('11th', '12th')),
@@ -151,6 +151,7 @@ CREATE TABLE IF NOT EXISTS public.participants (
 
 CREATE INDEX IF NOT EXISTS idx_participants_comp ON public.participants(competition_id);
 CREATE INDEX IF NOT EXISTS idx_participants_code ON public.participants(access_code);
+CREATE INDEX IF NOT EXISTS idx_participants_session ON public.participants(session_token);
 
 -- ----------------------------------------------------------------------------
 -- 6. SUBMISSIONS TABLE (Immutable, Idempotent, Server-Authoritative)

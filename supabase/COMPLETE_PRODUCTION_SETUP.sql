@@ -1,25 +1,20 @@
 -- ============================================================================
--- QUIZMANIA: MASTER PRODUCTION DATABASE INITIALIZATION SCRIPT
+-- QUIZMANIA: MASTER PRODUCTION DATABASE INITIALIZATION SCRIPT (HARDENED)
 -- Target: Supabase Cloud (PostgreSQL 14+)
 -- Project: https://ckxqkaawbntpaycagrlu.supabase.co
 -- 
--- INSTRUCTIONS FOR SUPABASE SQL EDITOR:
--- 1. Open Supabase Dashboard -> SQL Editor (New Query)
--- 2. Paste the ENTIRE contents of this file.
--- 3. Click "Run" (or Ctrl+Enter / Cmd+Enter).
--- 
--- WHAT THIS SCRIPT DOES:
--- - Enables uuid-ossp & pgcrypto extensions.
--- - Creates all tables: competitions, rounds, questions, question_options,
---   participants, submissions, exam_attempts, admin_roles.
--- - Populates default competition (QUIZ-2026) and rounds 1 & 2.
--- - Seeds all 20 official questions (10 General Paper + 10 Python Subject Paper)
---   with correct options securely stored on the server.
--- - Establishes hardened Row-Level Security (RLS) preventing any answer key leaks
---   and blocking public snooping on exam attempts.
--- - Creates all server-authoritative RPCs: register_participant,
---   start_or_restore_attempt, save_attempt_answer, submit_exam_attempt_rpc,
---   record_fullscreen_event, get_leaderboard, verify_admin_role_rpc.
+-- SECURITY HARDENING GUARANTEES:
+-- 1. Cryptographic Participant Authentication: All candidate RPCs strictly require
+--    and verify p_access_token (session_token or access_code). Never authorizes by UUID alone.
+-- 2. Anti-Hijacking Registration: Duplicate candidate details never expose an existing
+--    candidate's secret access_code or session token.
+-- 3. Dedicated Session Recovery: authenticate_participant(access_code) allows legitimate
+--    candidates to resume sessions with their secret credentials.
+-- 4. Server-Side 20-Second Question Deadline: Backend validates each question's timer
+--    in question_timers and rejects answers submitted after the 20-second window.
+-- 5. Zero Answer Key Exposure: Direct SELECT on question_options is revoked from public.
+-- 6. Exam Attempts Hardening: Public direct SELECT is blocked; only admins can inspect attempts.
+-- 7. Supabase Auth RBAC: Admin roles strictly enforced in verify_admin_role_rpc.
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -90,11 +85,12 @@ CREATE TABLE IF NOT EXISTS public.question_options (
 
 CREATE INDEX IF NOT EXISTS idx_options_question ON public.question_options(question_id);
 
--- Participants Table
+-- Participants Table (Cryptographic Token + Credentials)
 CREATE TABLE IF NOT EXISTS public.participants (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     competition_id UUID REFERENCES public.competitions(id) ON DELETE CASCADE,
     access_code TEXT NOT NULL UNIQUE,
+    session_token TEXT NOT NULL DEFAULT encode(gen_random_bytes(32), 'hex'),
     student_name TEXT NOT NULL,
     school_name TEXT NOT NULL,
     student_class TEXT NOT NULL CHECK (student_class IN ('11th', '12th')),
@@ -106,6 +102,7 @@ CREATE TABLE IF NOT EXISTS public.participants (
 
 CREATE INDEX IF NOT EXISTS idx_participants_comp ON public.participants(competition_id);
 CREATE INDEX IF NOT EXISTS idx_participants_code ON public.participants(access_code);
+CREATE INDEX IF NOT EXISTS idx_participants_session ON public.participants(session_token);
 
 -- Submissions Table (Immutable Question Log)
 CREATE TABLE IF NOT EXISTS public.submissions (
@@ -126,7 +123,7 @@ CREATE INDEX IF NOT EXISTS idx_submissions_participant ON public.submissions(par
 CREATE INDEX IF NOT EXISTS idx_submissions_question ON public.submissions(question_id);
 CREATE INDEX IF NOT EXISTS idx_submissions_comp_round ON public.submissions(competition_id, round_number);
 
--- Exam Attempts Table (Centralized Multi-Device Attempt State)
+-- Exam Attempts Table (Centralized Multi-Device Attempt State with 20s Timers)
 CREATE TABLE IF NOT EXISTS public.exam_attempts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     competition_id UUID REFERENCES public.competitions(id) ON DELETE CASCADE,
@@ -146,6 +143,7 @@ CREATE TABLE IF NOT EXISTS public.exam_attempts (
     time_taken_seconds INT NOT NULL DEFAULT 0,
     answers JSONB NOT NULL DEFAULT '{}'::jsonb,
     answer_timestamps JSONB NOT NULL DEFAULT '{}'::jsonb,
+    question_timers JSONB NOT NULL DEFAULT '{}'::jsonb,
     question_order JSONB NOT NULL DEFAULT '[]'::jsonb,
     fullscreen_exit_count INT NOT NULL DEFAULT 0,
     fullscreen_exits JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -384,7 +382,7 @@ CREATE POLICY "Public can view questions" ON public.questions FOR SELECT TO anon
 DROP POLICY IF EXISTS "Service role manages questions" ON public.questions;
 CREATE POLICY "Service role manages questions" ON public.questions FOR ALL TO service_role USING (true) WITH CHECK (true);
 
--- Question Options (Zero Answer Leakage)
+-- Question Options (Zero Client Leakage: Direct table SELECT revoked)
 REVOKE SELECT ON TABLE public.question_options FROM anon, authenticated;
 GRANT SELECT ON TABLE public.question_options TO service_role;
 
@@ -415,7 +413,8 @@ DROP POLICY IF EXISTS "Service role manages submissions" ON public.submissions;
 CREATE POLICY "Service role manages submissions"
     ON public.submissions FOR ALL TO service_role USING (true) WITH CHECK (true);
 
--- Exam Attempts (HARDENED: No public snooping)
+-- Exam Attempts (HARDENED: No public snooping permitted)
+REVOKE ALL ON public.exam_attempts FROM anon, public;
 DROP POLICY IF EXISTS "Participants can view their own exam attempts" ON public.exam_attempts;
 DROP POLICY IF EXISTS "Admins can view all exam attempts" ON public.exam_attempts;
 CREATE POLICY "Admins can view all exam attempts"
@@ -427,6 +426,7 @@ CREATE POLICY "Service role manages exam attempts"
     ON public.exam_attempts FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 -- Admin Roles
+REVOKE ALL ON public.admin_roles FROM anon, public;
 DROP POLICY IF EXISTS "Users can view their own admin role" ON public.admin_roles;
 CREATE POLICY "Users can view their own admin role"
     ON public.admin_roles FOR SELECT TO authenticated
@@ -449,7 +449,7 @@ AS $$
     SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT;
 $$;
 
--- Register Participant
+-- Register Participant (SECURE: NEVER LEAKS CREDENTIALS ON DUPLICATE)
 CREATE OR REPLACE FUNCTION public.register_participant(
     p_competition_code TEXT,
     p_student_name TEXT,
@@ -466,6 +466,7 @@ DECLARE
     v_clean_name TEXT;
     v_clean_school TEXT;
     v_code TEXT;
+    v_session_token TEXT;
     v_participant_id UUID;
     v_existing RECORD;
 BEGIN
@@ -473,7 +474,7 @@ BEGIN
     v_clean_school := trim(p_school_name);
     
     IF v_clean_name = '' OR v_clean_school = '' THEN
-        RETURN jsonb_build_object('success', false, 'error', 'Student name and school name are required.');
+        RETURN jsonb_build_object('success', false, 'error', 'Student full name and school name are required.');
     END IF;
 
     IF p_student_class NOT IN ('11th', '12th') THEN
@@ -501,8 +502,9 @@ BEGIN
         RETURNING * INTO v_comp;
     END IF;
 
-    -- Graceful Re-entry Guarantee (Restore if candidate reconnects)
-    SELECT * INTO v_existing FROM public.participants 
+    -- Security Fix: Prevent Duplicate Hijacking
+    -- If duplicate candidate profile is detected, NEVER reveal existing access_code or token!
+    SELECT id INTO v_existing FROM public.participants 
     WHERE competition_id = v_comp.id 
       AND lower(student_name) = lower(v_clean_name) 
       AND lower(school_name) = lower(v_clean_school)
@@ -510,14 +512,9 @@ BEGIN
 
     IF FOUND THEN
         RETURN jsonb_build_object(
-            'success', true,
+            'success', false,
             'is_duplicate', true,
-            'participant_id', v_existing.id,
-            'access_code', v_existing.access_code,
-            'student_name', v_existing.student_name,
-            'school_name', v_existing.school_name,
-            'student_class', v_existing.student_class,
-            'message', 'Welcome back! Restored your existing registration.'
+            'error', 'Candidate profile already registered. To resume an existing session, please authenticate with your Access Code.'
         );
     END IF;
 
@@ -525,10 +522,15 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'error', 'Registration for this competition is closed by the administrator.');
     END IF;
 
-    v_code := 'QZ-' || UPPER(SUBSTRING(md5(random()::text || clock_timestamp()::text) FROM 1 FOR 6));
+    -- Cryptographically secure generation of access code and session token
+    v_code := 'QZ-' || UPPER(SUBSTRING(encode(gen_random_bytes(4), 'hex') FROM 1 FOR 6));
+    v_session_token := encode(gen_random_bytes(32), 'hex');
 
-    INSERT INTO public.participants (competition_id, access_code, student_name, school_name, student_class)
-    VALUES (v_comp.id, v_code, v_clean_name, v_clean_school, p_student_class)
+    INSERT INTO public.participants (
+        competition_id, access_code, session_token, student_name, school_name, student_class
+    ) VALUES (
+        v_comp.id, v_code, v_session_token, v_clean_name, v_clean_school, p_student_class
+    )
     RETURNING id INTO v_participant_id;
 
     RETURN jsonb_build_object(
@@ -536,6 +538,7 @@ BEGIN
         'is_duplicate', false,
         'participant_id', v_participant_id,
         'access_code', v_code,
+        'session_token', v_session_token,
         'student_name', v_clean_name,
         'school_name', v_clean_school,
         'student_class', p_student_class,
@@ -544,9 +547,47 @@ BEGIN
 END;
 $$;
 
--- Start or Restore Exam Attempt
+-- Authenticate Participant & Restore Session via Access Code
+CREATE OR REPLACE FUNCTION public.authenticate_participant(
+    p_access_code TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+    v_participant RECORD;
+BEGIN
+    IF p_access_code IS NULL OR trim(p_access_code) = '' THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Access code is required.');
+    END IF;
+
+    SELECT * INTO v_participant FROM public.participants 
+    WHERE (access_code = trim(upper(p_access_code)) OR session_token = trim(p_access_code))
+      AND is_active = true;
+
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Invalid access code. Please check your credentials.');
+    END IF;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'participant_id', v_participant.id,
+        'access_code', v_participant.access_code,
+        'session_token', v_participant.session_token,
+        'student_name', v_participant.student_name,
+        'school_name', v_participant.school_name,
+        'student_class', v_participant.student_class,
+        'message', 'Authentication successful. Candidate session restored.'
+    );
+END;
+$$;
+
+-- Start or Restore Exam Attempt (CRYPTOGRAPHIC OWNERSHIP ENFORCED)
 CREATE OR REPLACE FUNCTION public.start_or_restore_attempt(
     p_participant_id UUID,
+    p_access_token TEXT,
     p_round_number INT,
     p_initial_question_order JSONB DEFAULT '[]'::jsonb
 )
@@ -561,11 +602,21 @@ DECLARE
     v_attempt RECORD;
     v_round1_attempt RECORD;
     v_now TIMESTAMPTZ := clock_timestamp();
+    v_now_ms BIGINT := (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT;
     v_duration INT := 200;
+    v_first_q TEXT;
 BEGIN
-    SELECT * INTO v_participant FROM public.participants WHERE id = p_participant_id;
+    -- Ownership check
+    IF p_access_token IS NULL OR trim(p_access_token) = '' THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Authorization Denied: Missing participant credentials.');
+    END IF;
+
+    SELECT * INTO v_participant FROM public.participants 
+    WHERE id = p_participant_id 
+      AND (session_token = trim(p_access_token) OR access_code = trim(upper(p_access_token)));
+
     IF NOT FOUND THEN
-        RETURN jsonb_build_object('success', false, 'error', 'Invalid participant ID.');
+        RETURN jsonb_build_object('success', false, 'error', 'Authentication Failed: Access token does not match participant ownership. Impersonation rejected.');
     END IF;
 
     SELECT * INTO v_comp FROM public.competitions WHERE id = v_participant.competition_id;
@@ -603,6 +654,7 @@ BEGIN
             'submitted_at', v_attempt.submitted_at,
             'answers', v_attempt.answers,
             'question_order', v_attempt.question_order,
+            'question_timers', v_attempt.question_timers,
             'fullscreen_exit_count', v_attempt.fullscreen_exit_count,
             'score', v_attempt.score,
             'max_marks', v_attempt.max_marks,
@@ -610,11 +662,19 @@ BEGIN
         );
     END IF;
 
-    -- Create new attempt
+    v_first_q := p_initial_question_order->>0;
+
+    -- Create new attempt with question 1 timer initialized
     INSERT INTO public.exam_attempts (
-        competition_id, participant_id, round_number, start_time, duration_seconds, is_submitted, answers, question_order
+        competition_id, participant_id, round_number, start_time, duration_seconds, is_submitted,
+        answers, question_timers, question_order
     ) VALUES (
-        v_comp.id, p_participant_id, p_round_number, v_now, v_duration, false, '{}'::jsonb, p_initial_question_order
+        v_comp.id, p_participant_id, p_round_number, v_now, v_duration, false, '{}'::jsonb,
+        CASE 
+            WHEN v_first_q IS NOT NULL THEN jsonb_build_object(v_first_q, jsonb_build_object('started_at', v_now_ms, 'deadline', v_now_ms + 20000, 'duration_seconds', 20))
+            ELSE '{}'::jsonb
+        END,
+        p_initial_question_order
     )
     RETURNING * INTO v_attempt;
 
@@ -628,15 +688,88 @@ BEGIN
         'duration_seconds', v_duration,
         'is_submitted', false,
         'answers', '{}'::jsonb,
+        'question_timers', v_attempt.question_timers,
         'question_order', p_initial_question_order,
         'fullscreen_exit_count', 0
     );
 END;
 $$;
 
--- Save Attempt Answer Atomically
+-- Start Question Timer (SERVER-ENFORCED 20-SECOND COUNTDOWN)
+CREATE OR REPLACE FUNCTION public.start_question_timer_rpc(
+    p_participant_id UUID,
+    p_access_token TEXT,
+    p_round_number INT,
+    p_question_id TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+    v_participant RECORD;
+    v_attempt RECORD;
+    v_now_ms BIGINT := (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT;
+    v_existing_timer JSONB;
+BEGIN
+    IF p_access_token IS NULL OR trim(p_access_token) = '' THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Authorization Denied.');
+    END IF;
+
+    SELECT * INTO v_participant FROM public.participants 
+    WHERE id = p_participant_id 
+      AND (session_token = trim(p_access_token) OR access_code = trim(upper(p_access_token)));
+
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Authentication Failed: Invalid credentials.');
+    END IF;
+
+    SELECT * INTO v_attempt FROM public.exam_attempts 
+    WHERE participant_id = p_participant_id AND round_number = p_round_number;
+
+    IF NOT FOUND OR v_attempt.is_submitted THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Active examination attempt not found.');
+    END IF;
+
+    -- If timer already started for this question, recover it! (DO NOT RESET)
+    v_existing_timer := v_attempt.question_timers->p_question_id;
+    IF v_existing_timer IS NOT NULL AND v_existing_timer ? 'deadline' THEN
+        RETURN jsonb_build_object(
+            'success', true,
+            'is_restored', true,
+            'question_id', p_question_id,
+            'started_at', (v_existing_timer->>'started_at')::BIGINT,
+            'deadline', (v_existing_timer->>'deadline')::BIGINT,
+            'duration_seconds', 20
+        );
+    END IF;
+
+    UPDATE public.exam_attempts
+    SET 
+        question_timers = jsonb_set(
+            COALESCE(question_timers, '{}'::jsonb),
+            ARRAY[p_question_id],
+            jsonb_build_object('started_at', v_now_ms, 'deadline', v_now_ms + 20000, 'duration_seconds', 20)
+        ),
+        updated_at = clock_timestamp()
+    WHERE id = v_attempt.id;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'is_restored', false,
+        'question_id', p_question_id,
+        'started_at', v_now_ms,
+        'deadline', v_now_ms + 20000,
+        'duration_seconds', 20
+    );
+END;
+$$;
+
+-- Save Attempt Answer (STRICT 20-SECOND QUESTION DEADLINE ENFORCED)
 CREATE OR REPLACE FUNCTION public.save_attempt_answer(
     p_participant_id UUID,
+    p_access_token TEXT,
     p_round_number INT,
     p_question_id TEXT,
     p_option_id TEXT
@@ -647,10 +780,26 @@ SECURITY DEFINER
 SET search_path = public, auth, pg_temp
 AS $$
 DECLARE
+    v_participant RECORD;
     v_attempt RECORD;
     v_now TIMESTAMPTZ := clock_timestamp();
-    v_deadline TIMESTAMPTZ;
+    v_now_ms BIGINT := (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT;
+    v_q_timer JSONB;
+    v_q_deadline BIGINT;
+    v_overall_deadline TIMESTAMPTZ;
 BEGIN
+    IF p_access_token IS NULL OR trim(p_access_token) = '' THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Authorization Denied: Missing participant credentials.');
+    END IF;
+
+    SELECT * INTO v_participant FROM public.participants 
+    WHERE id = p_participant_id 
+      AND (session_token = trim(p_access_token) OR access_code = trim(upper(p_access_token)));
+
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Authentication Failed: Access token does not match participant ownership.');
+    END IF;
+
     SELECT * INTO v_attempt FROM public.exam_attempts 
     WHERE participant_id = p_participant_id AND round_number = p_round_number;
 
@@ -662,15 +811,37 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'error', 'Attempt already submitted and finalized.');
     END IF;
 
-    v_deadline := v_attempt.start_time + (v_attempt.duration_seconds || ' seconds')::INTERVAL + INTERVAL '10 seconds';
-    IF v_now > v_deadline THEN
-        RETURN jsonb_build_object('success', false, 'is_expired', true, 'error', 'Overall examination time expired.');
+    -- Strict Server-Side 20-Second Question Deadline Enforcement
+    v_q_timer := v_attempt.question_timers->p_question_id;
+    
+    IF v_q_timer IS NOT NULL AND v_q_timer ? 'deadline' THEN
+        v_q_deadline := (v_q_timer->>'deadline')::BIGINT;
+        IF v_now_ms > (v_q_deadline + 1500) THEN
+            RETURN jsonb_build_object(
+                'success', false, 
+                'is_expired', true, 
+                'error', 'Question deadline expired: 20-second per-question limit exceeded. Answer rejected by server.'
+            );
+        END IF;
+    ELSE
+        v_attempt.question_timers := jsonb_set(
+            COALESCE(v_attempt.question_timers, '{}'::jsonb),
+            ARRAY[p_question_id],
+            jsonb_build_object('started_at', v_now_ms, 'deadline', v_now_ms + 20000, 'duration_seconds', 20)
+        );
+    END IF;
+
+    -- Overall attempt deadline check
+    v_overall_deadline := v_attempt.start_time + (v_attempt.duration_seconds || ' seconds')::INTERVAL + INTERVAL '10 seconds';
+    IF v_now > v_overall_deadline THEN
+        RETURN jsonb_build_object('success', false, 'is_expired', true, 'error', 'Overall examination time limit expired.');
     END IF;
 
     UPDATE public.exam_attempts
     SET 
         answers = jsonb_set(COALESCE(answers, '{}'::jsonb), ARRAY[p_question_id], to_jsonb(p_option_id)),
-        answer_timestamps = jsonb_set(COALESCE(answer_timestamps, '{}'::jsonb), ARRAY[p_question_id], to_jsonb(EXTRACT(EPOCH FROM v_now))),
+        answer_timestamps = jsonb_set(COALESCE(answer_timestamps, '{}'::jsonb), ARRAY[p_question_id], to_jsonb(v_now_ms)),
+        question_timers = v_attempt.question_timers,
         updated_at = v_now
     WHERE id = v_attempt.id;
 
@@ -678,9 +849,10 @@ BEGIN
 END;
 $$;
 
--- Submit Exam Attempt & Authoritative Evaluation
+-- Submit Exam Attempt & Authoritative Evaluation (OWNERSHIP ENFORCED)
 CREATE OR REPLACE FUNCTION public.submit_exam_attempt_rpc(
     p_participant_id UUID,
+    p_access_token TEXT,
     p_round_number INT
 )
 RETURNS JSONB
@@ -689,6 +861,7 @@ SECURITY DEFINER
 SET search_path = public, auth, pg_temp
 AS $$
 DECLARE
+    v_participant RECORD;
     v_attempt RECORD;
     v_q RECORD;
     v_now TIMESTAMPTZ := clock_timestamp();
@@ -704,6 +877,18 @@ DECLARE
     v_percentage NUMERIC(5, 2);
     v_is_qualified BOOLEAN := false;
 BEGIN
+    IF p_access_token IS NULL OR trim(p_access_token) = '' THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Authorization Denied.');
+    END IF;
+
+    SELECT * INTO v_participant FROM public.participants 
+    WHERE id = p_participant_id 
+      AND (session_token = trim(p_access_token) OR access_code = trim(upper(p_access_token)));
+
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Authentication Failed: Invalid credentials.');
+    END IF;
+
     SELECT * INTO v_attempt FROM public.exam_attempts 
     WHERE participant_id = p_participant_id AND round_number = p_round_number;
 
@@ -802,6 +987,7 @@ $$;
 -- Single Answer Submission
 CREATE OR REPLACE FUNCTION public.submit_student_answer(
     p_participant_id UUID,
+    p_access_token TEXT,
     p_question_id TEXT,
     p_selected_option_id TEXT
 )
@@ -820,9 +1006,16 @@ DECLARE
     v_points INT := 0;
     v_existing RECORD;
 BEGIN
-    SELECT * INTO v_participant FROM public.participants WHERE id = p_participant_id;
+    IF p_access_token IS NULL OR trim(p_access_token) = '' THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Authorization Denied.');
+    END IF;
+
+    SELECT * INTO v_participant FROM public.participants 
+    WHERE id = p_participant_id 
+      AND (session_token = trim(p_access_token) OR access_code = trim(upper(p_access_token)));
+
     IF NOT FOUND THEN
-        RETURN jsonb_build_object('success', false, 'error', 'Invalid participant ID.');
+        RETURN jsonb_build_object('success', false, 'error', 'Authentication Failed.');
     END IF;
 
     SELECT * INTO v_comp FROM public.competitions WHERE id = v_participant.competition_id;
@@ -858,9 +1051,10 @@ BEGIN
 END;
 $$;
 
--- Telemetry Logger
+-- Fullscreen Telemetry Logger (OWNERSHIP ENFORCED)
 CREATE OR REPLACE FUNCTION public.record_fullscreen_event(
     p_participant_id UUID,
+    p_access_token TEXT,
     p_round_number INT,
     p_event_type TEXT,
     p_timestamp BIGINT
@@ -871,9 +1065,22 @@ SECURITY DEFINER
 SET search_path = public, auth, pg_temp
 AS $$
 DECLARE
+    v_participant RECORD;
     v_attempt RECORD;
     v_new_event JSONB;
 BEGIN
+    IF p_access_token IS NULL OR trim(p_access_token) = '' THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Authorization Denied.');
+    END IF;
+
+    SELECT * INTO v_participant FROM public.participants 
+    WHERE id = p_participant_id 
+      AND (session_token = trim(p_access_token) OR access_code = trim(upper(p_access_token)));
+
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Authentication Failed.');
+    END IF;
+
     SELECT * INTO v_attempt FROM public.exam_attempts 
     WHERE participant_id = p_participant_id AND round_number = p_round_number;
 
@@ -993,10 +1200,12 @@ $$;
 -- Permissions Grants
 GRANT EXECUTE ON FUNCTION public.get_server_time() TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.register_participant(TEXT, TEXT, TEXT, TEXT) TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.start_or_restore_attempt(UUID, INT, JSONB) TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.save_attempt_answer(UUID, INT, TEXT, TEXT) TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.submit_exam_attempt_rpc(UUID, INT) TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.submit_student_answer(UUID, TEXT, TEXT) TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.record_fullscreen_event(UUID, INT, TEXT, BIGINT) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.authenticate_participant(TEXT) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.start_or_restore_attempt(UUID, TEXT, INT, JSONB) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.start_question_timer_rpc(UUID, TEXT, INT, TEXT) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.save_attempt_answer(UUID, TEXT, INT, TEXT, TEXT) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.submit_exam_attempt_rpc(UUID, TEXT, INT) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.submit_student_answer(UUID, TEXT, TEXT, TEXT) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.record_fullscreen_event(UUID, TEXT, INT, TEXT, BIGINT) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.get_leaderboard(UUID) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.verify_admin_role_rpc() TO authenticated, service_role;

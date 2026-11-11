@@ -302,6 +302,7 @@ class CompetitionService {
             id: data.participant_id,
             competition_id: this.localState.id,
             access_code: data.access_code,
+            session_token: data.session_token,
             student_name: data.student_name,
             school_name: data.school_name,
             student_class: data.student_class,
@@ -327,26 +328,22 @@ class CompetitionService {
     );
 
     if (existing) {
-      this.saveStudentSession(existing);
       return {
-        success: true,
+        success: false,
         is_duplicate: true,
-        participant_id: existing.id,
-        access_code: existing.access_code,
-        student_name: existing.student_name,
-        school_name: existing.school_name,
-        student_class: existing.student_class,
-        message: 'Welcome back! Restored your verified candidate profile.',
+        error: 'Candidate profile is already registered. If this is your account, please enter your Access Code to resume your session.',
       };
     }
 
     const newId = 'part_' + Math.random().toString(36).substring(2, 10);
     const accessCode = 'QZ-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+    const sessionToken = Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2);
 
     const participant: Participant = {
       id: newId,
       competition_id: this.localState.id,
       access_code: accessCode,
+      session_token: sessionToken,
       student_name: cleanName,
       school_name: cleanSchool,
       student_class: studentClass,
@@ -369,6 +366,79 @@ class CompetitionService {
       student_class: participant.student_class,
       message: 'Registration confirmed! Welcome to the examination platform.',
     };
+  }
+
+  /**
+   * Cryptographically recovers candidate session using their secret Access Code.
+   */
+  public async loginWithAccessCode(accessCode: string): Promise<RegistrationResult> {
+    const cleanCode = accessCode.trim().toUpperCase();
+    if (!cleanCode) {
+      return { success: false, error: 'Access code is required.' };
+    }
+
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        const { data, error } = await supabase.rpc('authenticate_participant', {
+          p_access_code: cleanCode,
+        });
+
+        if (error) {
+          return { success: false, error: error.message };
+        }
+        if (data && data.success) {
+          const participant: Participant = {
+            id: data.participant_id,
+            competition_id: this.localState.id,
+            access_code: data.access_code,
+            session_token: data.session_token,
+            student_name: data.student_name,
+            school_name: data.school_name,
+            student_class: data.student_class,
+            is_active: true,
+            last_ping_at: new Date().toISOString(),
+            created_at: new Date().toISOString(),
+          };
+          this.saveStudentSession(participant);
+          return data;
+        }
+        return { success: false, error: data?.error || 'Invalid access code.' };
+      } catch (err: any) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    const found = this.participants.find((p) => p.access_code.toUpperCase() === cleanCode);
+    if (found) {
+      this.saveStudentSession(found);
+      return {
+        success: true,
+        participant_id: found.id,
+        access_code: found.access_code,
+        student_name: found.student_name,
+        school_name: found.school_name,
+        student_class: found.student_class,
+        message: 'Welcome back! Restored your verified candidate profile.',
+      };
+    }
+
+    return { success: false, error: 'Access code not found. Please verify your code.' };
+  }
+
+  /**
+   * Retrieves participant cryptographic secret (session_token or access_code)
+   * used to prove ownership in authoritative RPCs.
+   */
+  public getParticipantCredential(participantId: string): string {
+    const active = this.getActiveStudentSession();
+    if (active && active.id === participantId) {
+      return active.session_token || active.access_code || '';
+    }
+    const found = this.participants.find((p) => p.id === participantId);
+    if (found) {
+      return found.session_token || found.access_code || '';
+    }
+    return '';
   }
 
   public saveStudentSession(participant: Participant) {
@@ -512,6 +582,7 @@ class CompetitionService {
       Promise.resolve(
         supabase.rpc('start_or_restore_attempt', {
           p_participant_id: participantId,
+          p_access_token: this.getParticipantCredential(participantId),
           p_round_number: roundNumber,
           p_initial_question_order: questionSequence,
         })
@@ -560,6 +631,7 @@ class CompetitionService {
     try {
       const { data, error } = await supabase.rpc('start_or_restore_attempt', {
         p_participant_id: participantId,
+        p_access_token: this.getParticipantCredential(participantId),
         p_round_number: roundNumber,
         p_initial_question_order: attempt.questionSequence,
       });
@@ -670,6 +742,34 @@ class CompetitionService {
 
     attempt.currentQuestionIndex = questionIndex;
     this.saveExamAttempt(attempt);
+
+    // Sync authoritative question timer with Supabase
+    if (isSupabaseConfigured() && supabase) {
+      const key = this.getAttemptKey(participantId, roundNumber);
+      Promise.resolve(
+        supabase.rpc('start_question_timer_rpc', {
+          p_participant_id: participantId,
+          p_access_token: this.getParticipantCredential(participantId),
+          p_round_number: roundNumber,
+          p_question_id: questionId,
+        })
+      )
+        .then(({ data, error }: { data: any; error: any }) => {
+          if (!error && data && data.success) {
+            const current = this.examAttempts[key];
+            if (current && current.questionTimers && current.questionTimers[questionId]) {
+              if (data.deadline) {
+                current.questionTimers[questionId].deadlineTime = Number(data.deadline);
+              }
+              if (data.started_at) {
+                current.questionTimers[questionId].firstDisplayedAt = Number(data.started_at);
+              }
+            }
+          }
+        })
+        .catch(() => {});
+    }
+
     return timer;
   }
 
@@ -716,6 +816,7 @@ class CompetitionService {
       Promise.resolve(
         supabase.rpc('save_attempt_answer', {
           p_participant_id: participantId,
+          p_access_token: this.getParticipantCredential(participantId),
           p_round_number: roundNumber,
           p_question_id: questionId,
           p_option_id: optionId,
@@ -793,9 +894,23 @@ class CompetitionService {
 
     if (!attempt.fullscreenExits) attempt.fullscreenExits = [];
     attempt.fullscreenExitCount = (attempt.fullscreenExitCount || 0) + 1;
-    attempt.fullscreenExits.push({ timestamp: Date.now() });
+    const now = Date.now();
+    attempt.fullscreenExits.push({ timestamp: now });
 
     this.saveExamAttempt(attempt);
+
+    if (isSupabaseConfigured() && supabase) {
+      Promise.resolve(
+        supabase.rpc('record_fullscreen_event', {
+          p_participant_id: participantId,
+          p_access_token: this.getParticipantCredential(participantId),
+          p_round_number: roundNumber,
+          p_event_type: 'exit',
+          p_timestamp: now,
+        })
+      ).catch(() => {});
+    }
+
     return { exitCount: attempt.fullscreenExitCount };
   }
 
@@ -883,6 +998,7 @@ class CompetitionService {
       try {
         const { data, error } = await supabase.rpc('submit_exam_attempt_rpc', {
           p_participant_id: participantId,
+          p_access_token: this.getParticipantCredential(participantId),
           p_round_number: roundNumber,
         });
 
@@ -1061,6 +1177,7 @@ class CompetitionService {
       try {
         const { data, error } = await supabase.rpc('submit_student_answer', {
           p_participant_id: participantId,
+          p_access_token: this.getParticipantCredential(participantId),
           p_question_id: questionId,
           p_selected_option_id: selectedOptionId,
         });
