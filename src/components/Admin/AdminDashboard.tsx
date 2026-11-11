@@ -19,12 +19,15 @@ import {
   Eye, 
   ToggleLeft, 
   ToggleRight,
-  ShieldAlert
+  ShieldAlert,
+  Percent,
+  FileCheck
 } from 'lucide-react';
 import { CompetitionState, Participant, LeaderboardEntry, StudentClass } from '../../types';
 import { CLIENT_QUESTIONS } from '../../data/questions';
 import { competitionService } from '../../services/competitionService';
 import { ResetModal } from './ResetModal';
+import { StudentAuditModal } from './StudentAuditModal';
 
 interface AdminDashboardProps {
   competitionState: CompetitionState;
@@ -33,22 +36,38 @@ interface AdminDashboardProps {
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   competitionState,
 }) => {
-  // Authentication PIN
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    return sessionStorage.getItem('quizmania_admin_authed') === 'true';
+  // Session token state from sessionStorage
+  const [adminToken, setAdminToken] = useState<string | null>(() => {
+    return sessionStorage.getItem('quizmania_admin_token');
   });
-  const [pinInput, setPinInput] = useState('');
-  const [pinError, setPinError] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    const token = sessionStorage.getItem('quizmania_admin_token');
+    return competitionService.verifyAdminSession(token);
+  });
+
+  const [usernameInput, setUsernameInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
 
   // Participants & Leaderboard local data
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
 
+  // Audit modal state
+  const [auditParticipantId, setAuditParticipantId] = useState<string | null>(null);
+  const [auditStudentName, setAuditStudentName] = useState<string>('');
+
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSchool, setSelectedSchool] = useState<string>('all');
   const [selectedClass, setSelectedClass] = useState<string>('all');
+
+  // Qualification cutoff state
+  const [qualifyingScore, setQualifyingScore] = useState<number>(() => {
+    return competitionService.getQualifyingScore();
+  });
 
   // Load telemetry data
   const refreshData = async () => {
@@ -64,15 +83,41 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  const handlePinSubmit = (e: React.FormEvent) => {
+  const handleAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (pinInput === 'quizmania2026' || pinInput === 'admin123') {
-      setIsAuthenticated(true);
-      sessionStorage.setItem('quizmania_admin_authed', 'true');
-      setPinError(false);
-    } else {
-      setPinError(true);
+    setAuthError(null);
+    setIsAuthenticating(true);
+    try {
+      const res = await competitionService.loginAdmin(usernameInput, passwordInput);
+      if (res.success && res.token) {
+        setAdminToken(res.token);
+        setIsAuthenticated(true);
+        sessionStorage.setItem('quizmania_admin_token', res.token);
+        setPasswordInput('');
+        refreshData();
+      } else {
+        setAuthError(res.error || 'Authentication failed. Please verify administrator credentials.');
+      }
+    } catch (err: any) {
+      setAuthError(err.message || 'An unexpected error occurred during administrator authentication.');
+    } finally {
+      setIsAuthenticating(false);
     }
+  };
+
+  const handleAdminLogout = () => {
+    if (adminToken) {
+      competitionService.logoutAdmin(adminToken);
+    }
+    setAdminToken(null);
+    setIsAuthenticated(false);
+    sessionStorage.removeItem('quizmania_admin_token');
+  };
+
+  const handleUpdateQualifyingCutoff = (newCutoff: number) => {
+    setQualifyingScore(newCutoff);
+    competitionService.setQualifyingScore(newCutoff, adminToken || undefined);
+    refreshData();
   };
 
   // Metrics
@@ -98,6 +143,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       'Total Score',
       'Total Time (ms)',
       'Correct Count',
+      'Qualified for Round 2',
       'Access Code',
     ];
 
@@ -111,6 +157,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       row.total_score,
       row.total_time_ms,
       row.correct_count,
+      row.is_qualified ? 'YES' : 'NO',
       participants.find((p) => p.id === row.participant_id)?.access_code || '',
     ]);
 
@@ -148,409 +195,502 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     );
   }, [competitionState.current_round_number]);
 
-  // If not authenticated, show PIN gate
+  // If not authenticated with a verified administrator session, show secure Administrator Login
   if (!isAuthenticated) {
     return (
-      <div className="max-w-md mx-auto px-4 py-16">
-        <div className="bg-[#121A2B] border border-[#22304C] rounded-2xl p-6 sm:p-8 shadow-2xl text-center">
-          <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 mx-auto flex items-center justify-center mb-4">
+      <div className="max-w-md mx-auto px-4 py-16 animate-fadeIn">
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 shadow-soft text-center">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-600 mx-auto flex items-center justify-center mb-4">
             <Lock className="w-6 h-6" />
           </div>
-          <h2 className="text-xl font-bold text-white mb-2">Organizer Access Gate</h2>
-          <p className="text-xs text-slate-400 mb-6">
-            Enter administrator PIN to access the competition orchestrator.
+          <h2 className="text-xl font-bold text-slate-900 mb-1">Administrator Sign In</h2>
+          <p className="text-xs text-slate-500 mb-6">
+            Authorized tournament directors and examination officers only.
           </p>
 
-          <form onSubmit={handlePinSubmit} className="space-y-4">
-            <input
-              type="password"
-              value={pinInput}
-              onChange={(e) => setPinInput(e.target.value)}
-              placeholder="Enter PIN (e.g. quizmania2026)"
-              className="w-full px-4 py-3 rounded-xl bg-[#0B1020] border border-[#22304C] focus:border-indigo-500 text-center font-mono text-white text-sm outline-none"
-            />
-            {pinError && (
-              <p className="text-xs text-rose-400 font-medium">
-                Incorrect PIN. Default is <code className="bg-slate-900 px-1 py-0.5 rounded">quizmania2026</code>
-              </p>
-            )}
+          {authError && (
+            <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs text-left font-medium animate-fadeIn">
+              {authError}
+            </div>
+          )}
+
+          <form onSubmit={handleAdminLogin} className="space-y-4 text-left">
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                Admin Username
+              </label>
+              <input
+                type="text"
+                required
+                value={usernameInput}
+                onChange={(e) => setUsernameInput(e.target.value)}
+                placeholder="Enter administrator username"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/10 text-slate-900 text-sm outline-none font-medium"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                Admin Password / Secret Key
+              </label>
+              <input
+                type="password"
+                required
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                placeholder="Enter administrator secret"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/10 text-slate-900 text-sm outline-none font-medium"
+              />
+            </div>
+
             <button
               type="submit"
-              className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 font-bold text-xs text-white shadow-lg shadow-indigo-600/30 cursor-pointer transition-all"
+              disabled={isAuthenticating}
+              className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 font-bold text-xs text-white shadow-soft cursor-pointer transition-all flex items-center justify-center gap-2 disabled:opacity-60"
             >
-              Unlock Dashboard
+              {isAuthenticating ? (
+                <span>Authenticating Credentials...</span>
+              ) : (
+                <>
+                  <ShieldAlert className="w-4 h-4" />
+                  <span>Authenticate Session</span>
+                </>
+              )}
             </button>
           </form>
+          <div className="mt-6 pt-4 border-t border-slate-100 text-[11px] text-slate-400">
+            Protected by Server-Authoritative Token Verification &bull; RBAC
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 animate-fadeIn">
+      {/* Top Session Security Banner */}
+      <div className="bg-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-soft flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center text-indigo-300 shrink-0">
+            <ShieldAlert className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-sm text-white">Administrator Session Active</span>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-bold">
+                ROLE: ADMIN
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Secure examination management console &bull; Token-authenticated audit logging
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={handleAdminLogout}
+          className="self-start sm:self-auto px-4 py-2 rounded-xl text-xs font-bold bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
+        >
+          Sign Out of Admin
+        </button>
+      </div>
+
       {/* Overview Stats Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
-        <div className="bg-[#121A2B] border border-[#22304C] p-4 rounded-2xl">
-          <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
-            <Users className="w-3.5 h-3.5 text-indigo-400" />
+        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-soft">
+          <div className="flex items-center gap-2 text-slate-500 text-xs mb-1 font-medium">
+            <Users className="w-3.5 h-3.5 text-indigo-600" />
             <span>Total Students</span>
           </div>
-          <div className="text-2xl font-extrabold text-white font-mono">{totalStudents}</div>
+          <div className="text-2xl font-extrabold text-slate-900 font-mono">{totalStudents}</div>
         </div>
 
-        <div className="bg-[#121A2B] border border-[#22304C] p-4 rounded-2xl">
-          <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
-            <GraduationCap className="w-3.5 h-3.5 text-cyan-400" />
+        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-soft">
+          <div className="flex items-center gap-2 text-slate-500 text-xs mb-1 font-medium">
+            <GraduationCap className="w-3.5 h-3.5 text-indigo-600" />
             <span>Class 11th</span>
           </div>
-          <div className="text-2xl font-extrabold text-cyan-300 font-mono">{class11Count}</div>
+          <div className="text-2xl font-extrabold text-slate-900 font-mono">{class11Count}</div>
         </div>
 
-        <div className="bg-[#121A2B] border border-[#22304C] p-4 rounded-2xl">
-          <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
-            <GraduationCap className="w-3.5 h-3.5 text-indigo-400" />
+        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-soft">
+          <div className="flex items-center gap-2 text-slate-500 text-xs mb-1 font-medium">
+            <GraduationCap className="w-3.5 h-3.5 text-blue-600" />
             <span>Class 12th</span>
           </div>
-          <div className="text-2xl font-extrabold text-indigo-300 font-mono">{class12Count}</div>
+          <div className="text-2xl font-extrabold text-slate-900 font-mono">{class12Count}</div>
         </div>
 
-        <div className="bg-[#121A2B] border border-[#22304C] p-4 rounded-2xl">
-          <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
-            <School className="w-3.5 h-3.5 text-emerald-400" />
+        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-soft">
+          <div className="flex items-center gap-2 text-slate-500 text-xs mb-1 font-medium">
+            <School className="w-3.5 h-3.5 text-emerald-600" />
             <span>Schools</span>
           </div>
-          <div className="text-2xl font-extrabold text-emerald-400 font-mono">{uniqueSchools.length}</div>
+          <div className="text-2xl font-extrabold text-slate-900 font-mono">{uniqueSchools.length}</div>
         </div>
 
-        <div className="bg-[#121A2B] border border-[#22304C] p-4 rounded-2xl">
-          <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
-            <CheckCircle2 className="w-3.5 h-3.5 text-amber-400" />
+        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-soft">
+          <div className="flex items-center gap-2 text-slate-500 text-xs mb-1 font-medium">
+            <Clock className="w-3.5 h-3.5 text-amber-600" />
             <span>Submissions</span>
           </div>
-          <div className="text-2xl font-extrabold text-amber-300 font-mono">{totalSubmissions}</div>
+          <div className="text-2xl font-extrabold text-slate-900 font-mono">{totalSubmissions}</div>
         </div>
 
-        <div className="bg-[#121A2B] border border-[#22304C] p-4 rounded-2xl">
-          <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
-            <Clock className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Round Status</span>
+        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-soft">
+          <div className="flex items-center gap-2 text-slate-500 text-xs mb-1 font-medium">
+            <Percent className="w-3.5 h-3.5 text-purple-600" />
+            <span>Shortlist Cutoff</span>
           </div>
-          <div className="text-sm font-bold text-white capitalize mt-1 truncate">
-            {competitionState.status.replace('_', ' ')}
-          </div>
+          <div className="text-2xl font-extrabold text-indigo-700 font-mono">{qualifyingScore}%</div>
         </div>
       </div>
 
-      {/* Orchestrator Controller Card */}
-      <div className="bg-[#121A2B] border border-[#22304C] rounded-2xl p-6 shadow-xl">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-[#19243A]">
-          <div>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400 font-mono">
-              Live Control Panel
+      {/* Control Panels Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left Column: Competition Stage Orchestrator (7 cols) */}
+        <div className="lg:col-span-7 bg-white border border-slate-200 rounded-2xl p-6 shadow-soft space-y-6">
+          <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+            <div>
+              <h2 className="text-base font-bold text-slate-900">Competition Stage Orchestration</h2>
+              <p className="text-xs text-slate-500">
+                Manage registration lifecycle, synchronized rounds, and question stepper.
+              </p>
+            </div>
+            <span className="text-xs font-mono uppercase font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+              State: {competitionState.status}
             </span>
-            <h2 className="text-xl font-bold text-white flex items-center gap-2.5 mt-0.5">
-              <span>Competition Orchestration</span>
-              {competitionState.status === 'in_progress' && (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/30">
-                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping" />
-                  Round {competitionState.current_round_number} Active
-                </span>
-              )}
-            </h2>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
-            {/* Auto Advance Toggle */}
+          {/* Registration Controls */}
+          <div className="flex items-center justify-between p-4 rounded-xl bg-slate-50 border border-slate-200">
+            <div>
+              <div className="text-sm font-semibold text-slate-900">Candidate Registration</div>
+              <div className="text-xs text-slate-500">Allow or freeze new student registrations.</div>
+            </div>
             <button
-              onClick={() => competitionService.setAutoAdvance(!competitionState.auto_advance)}
-              className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
-                competitionState.auto_advance
-                  ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
-                  : 'bg-slate-800 border-slate-700 text-slate-400'
+              onClick={() => {
+                const next = competitionState.status === 'registration_open' ? 'registration_closed' : 'registration_open';
+                competitionService.setStatus(next);
+              }}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+                competitionState.status === 'registration_open'
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                  : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
               }`}
             >
-              {competitionState.auto_advance ? (
-                <ToggleRight className="w-4 h-4 text-emerald-400" />
+              {competitionState.status === 'registration_open' ? (
+                <>
+                  <ToggleRight className="w-4 h-4" />
+                  <span>Open (Accepting)</span>
+                </>
               ) : (
-                <ToggleLeft className="w-4 h-4 text-slate-500" />
+                <>
+                  <ToggleLeft className="w-4 h-4" />
+                  <span>Closed (Locked)</span>
+                </>
               )}
-              <span>Auto-Advance 20s Timer ({competitionState.auto_advance ? 'ON' : 'OFF'})</span>
+            </button>
+          </div>
+
+          {/* Round Starter Buttons */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <button
+              onClick={() => competitionService.startRound(1)}
+              className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/50 hover:bg-indigo-50 text-left transition-all cursor-pointer group"
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold uppercase tracking-wider font-mono text-indigo-700">
+                  Round 1
+                </span>
+                <Play className="w-4 h-4 text-indigo-600 group-hover:scale-110 transition-transform" />
+              </div>
+              <div className="text-sm font-bold text-slate-900">General Paper</div>
+              <div className="text-xs text-slate-500 mt-1">10 Questions &bull; Fundamentals & Hardware</div>
             </button>
 
-            {/* Mock Students Seed (Rehearsal) */}
+            <button
+              onClick={() => competitionService.startRound(2)}
+              className="p-4 rounded-xl border border-blue-200 bg-blue-50/50 hover:bg-blue-50 text-left transition-all cursor-pointer group"
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold uppercase tracking-wider font-mono text-blue-600">
+                  Round 2
+                </span>
+                <Play className="w-4 h-4 text-blue-600 group-hover:scale-110 transition-transform" />
+              </div>
+              <div className="text-sm font-bold text-slate-900">Python Subject Paper</div>
+              <div className="text-xs text-slate-500 mt-1">10 Questions &bull; Shortlisted Candidates</div>
+            </button>
+          </div>
+
+          {/* Synchronized Stepper & Auto-Advance */}
+          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Active Question Stepper
+                </span>
+                <div className="text-xs text-slate-500">
+                  {competitionState.current_question_id
+                    ? `Currently on Question ${competitionState.current_question_number} (Submissions: ${currentQSubmissions})`
+                    : 'No synchronized question currently released.'}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => competitionService.advanceNextQuestion()}
+                  disabled={competitionState.status !== 'in_progress'}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <SkipForward className="w-3.5 h-3.5" />
+                  <span>Next Question</span>
+                </button>
+
+                <button
+                  onClick={() => competitionService.endRound()}
+                  disabled={competitionState.status !== 'in_progress'}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 hover:bg-slate-200 disabled:opacity-40 text-slate-700 cursor-pointer"
+                >
+                  <Square className="w-3.5 h-3.5" />
+                  <span>End Round</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Jump to question pills */}
+            {currentRoundQuestions.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-slate-200">
+                <span className="text-[11px] font-semibold text-slate-500 mr-1">Direct Jump:</span>
+                {currentRoundQuestions.map((q) => {
+                  const isCurrent = q.id === competitionState.current_question_id;
+                  return (
+                    <button
+                      key={q.id}
+                      onClick={() => competitionService.releaseQuestion(q.id)}
+                      className={`w-7 h-7 rounded-lg text-xs font-mono font-bold flex items-center justify-center transition-all cursor-pointer ${
+                        isCurrent
+                          ? 'bg-indigo-600 text-white shadow-soft-sm'
+                          : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      {q.questionNumber}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right Column: Shortlist Rules & Administration (5 cols) */}
+        <div className="lg:col-span-5 bg-white border border-slate-200 rounded-2xl p-6 shadow-soft space-y-6">
+          <div className="pb-4 border-b border-slate-100">
+            <h2 className="text-base font-bold text-slate-900">Qualification & Tools</h2>
+            <p className="text-xs text-slate-500">
+              Configure shortlist rules, seed rehearsals, and export results.
+            </p>
+          </div>
+
+          {/* Qualification Cutoff Configurator */}
+          <div className="p-4 rounded-xl bg-purple-50/60 border border-purple-200">
+            <div className="flex items-center gap-2 text-xs font-bold text-purple-900 uppercase tracking-wider mb-1">
+              <Percent className="w-4 h-4 text-purple-600" />
+              <span>Round 2 Shortlist Threshold</span>
+            </div>
+            <p className="text-xs text-purple-950 mb-3">
+              Students scoring at or above this percentage qualify for Round 2.
+            </p>
+            <div className="flex items-center gap-2">
+              {[50, 60, 70, 80].map((scoreVal) => (
+                <button
+                  key={scoreVal}
+                  onClick={() => handleUpdateQualifyingCutoff(scoreVal)}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-bold font-mono transition-all cursor-pointer ${
+                    qualifyingScore === scoreVal
+                      ? 'bg-purple-600 text-white shadow-soft-sm'
+                      : 'bg-white border border-purple-200 text-purple-800 hover:bg-purple-100'
+                  }`}
+                >
+                  {scoreVal}%
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Publish Results & CSV Export */}
+          <div className="space-y-3">
+            <button
+              onClick={() => competitionService.publishResults()}
+              className="w-full py-2.5 px-4 rounded-xl font-bold text-xs bg-slate-900 hover:bg-slate-800 text-white shadow-soft transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Trophy className="w-3.5 h-3.5 text-amber-400" />
+              <span>Publish Official Results to Leaderboard</span>
+            </button>
+
+            <button
+              onClick={handleExportCSV}
+              disabled={leaderboard.length === 0}
+              className="w-full py-2.5 px-4 rounded-xl font-semibold text-xs border border-slate-200 hover:bg-slate-50 disabled:opacity-40 text-slate-700 transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Export Official Results (CSV)</span>
+            </button>
+          </div>
+
+          {/* Rehearsal Simulation & Reset */}
+          <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-3">
             <button
               onClick={() => {
                 const count = competitionService.seedMockParticipants(60);
                 refreshData();
-                alert(`Added ${count} mock registered students across 8 schools!`);
+                alert(`Successfully seeded ${count} mock candidates for rehearsal.`);
               }}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 hover:bg-indigo-600/30 transition-all cursor-pointer"
+              className="text-xs font-semibold text-indigo-700 hover:text-indigo-900 transition-colors cursor-pointer"
             >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Seed 60 Mock Students</span>
+              + Seed 60 Rehearsal Candidates
             </button>
 
-            {/* Reset Button */}
             <button
               onClick={() => setIsResetModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-rose-600/15 text-rose-300 border border-rose-500/30 hover:bg-rose-600/25 transition-all cursor-pointer"
+              className="text-xs font-semibold text-rose-600 hover:text-rose-800 transition-colors cursor-pointer"
             >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Reset</span>
+              Reset Competition
             </button>
           </div>
         </div>
-
-        {/* Action Controls Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-6">
-          {/* Registration Control */}
-          <div className="bg-[#0B1020] p-4 rounded-xl border border-[#22304C]">
-            <span className="text-[11px] font-mono font-bold text-slate-400 uppercase block mb-2">
-              Registration Gate
-            </span>
-            {competitionState.status === 'registration_open' ? (
-              <button
-                onClick={() => competitionService.setStatus('registration_closed')}
-                className="w-full py-2.5 px-4 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-bold text-xs cursor-pointer transition-all flex items-center justify-center gap-1.5"
-              >
-                <Lock className="w-3.5 h-3.5" />
-                <span>Close Registration</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => competitionService.setStatus('registration_open')}
-                className="w-full py-2.5 px-4 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 font-bold text-xs cursor-pointer transition-all flex items-center justify-center gap-1.5"
-              >
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>Open Registration</span>
-              </button>
-            )}
-          </div>
-
-          {/* Round 1 Control */}
-          <div className="bg-[#0B1020] p-4 rounded-xl border border-[#22304C]">
-            <span className="text-[11px] font-mono font-bold text-indigo-400 uppercase block mb-2">
-              Round 1 (General Paper)
-            </span>
-            {competitionState.status === 'in_progress' && competitionState.current_round_number === 1 ? (
-              <button
-                onClick={() => competitionService.endRound()}
-                className="w-full py-2.5 px-4 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs cursor-pointer transition-all flex items-center justify-center gap-1.5"
-              >
-                <Square className="w-3.5 h-3.5" />
-                <span>End Round 1</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => competitionService.startRound(1)}
-                className="w-full py-2.5 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/30"
-              >
-                <Play className="w-3.5 h-3.5" />
-                <span>Start Round 1 (10 Qs)</span>
-              </button>
-            )}
-          </div>
-
-          {/* Round 2 Control */}
-          <div className="bg-[#0B1020] p-4 rounded-xl border border-[#22304C]">
-            <span className="text-[11px] font-mono font-bold text-cyan-400 uppercase block mb-2">
-              Round 2 (Subject Paper)
-            </span>
-            {competitionState.status === 'in_progress' && competitionState.current_round_number === 2 ? (
-              <button
-                onClick={() => competitionService.endRound()}
-                className="w-full py-2.5 px-4 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs cursor-pointer transition-all flex items-center justify-center gap-1.5"
-              >
-                <Square className="w-3.5 h-3.5" />
-                <span>End Round 2</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => competitionService.startRound(2)}
-                className="w-full py-2.5 px-4 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md shadow-cyan-600/30"
-              >
-                <Play className="w-3.5 h-3.5" />
-                <span>Start Round 2 (Python)</span>
-              </button>
-            )}
-          </div>
-
-          {/* Results Publishing */}
-          <div className="bg-[#0B1020] p-4 rounded-xl border border-[#22304C]">
-            <span className="text-[11px] font-mono font-bold text-amber-400 uppercase block mb-2">
-              Final Results
-            </span>
-            <button
-              onClick={() => competitionService.publishResults()}
-              className="w-full py-2.5 px-4 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md shadow-amber-500/20"
-            >
-              <Trophy className="w-3.5 h-3.5" />
-              <span>Publish Official Results</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Live Question Telemetry & Jump Selector */}
-        {competitionState.status === 'in_progress' && (
-          <div className="mt-6 pt-6 border-t border-[#19243A]">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-bold text-white font-mono">
-                  Active Question: Q{competitionState.current_question_number} of 10
-                </span>
-                <span className="text-xs text-slate-400">
-                  Submissions: <strong className="text-emerald-400 font-mono">{currentQSubmissions}</strong> of {totalStudents}
-                </span>
-              </div>
-
-              <button
-                onClick={() => competitionService.advanceNextQuestion()}
-                className="self-start sm:self-auto flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/30 cursor-pointer transition-all"
-              >
-                <span>Advance Next Question</span>
-                <SkipForward className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {/* Quick jump pills */}
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-slate-500 mr-2 font-mono">Jump to:</span>
-              {currentRoundQuestions.map((q) => {
-                const isActive = q.id === competitionState.current_question_id;
-                return (
-                  <button
-                    key={q.id}
-                    onClick={() => competitionService.releaseQuestion(q.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
-                      isActive
-                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                        : 'bg-[#0B1020] text-slate-400 hover:text-white border border-[#22304C]'
-                    }`}
-                  >
-                    Q{q.questionNumber}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* Participant Management Table */}
-      <div className="bg-[#121A2B] border border-[#22304C] rounded-2xl p-6 shadow-xl space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      {/* Participants & Live Scores Roster Table */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-soft">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-100">
           <div>
-            <h3 className="text-lg font-bold text-white">Registered Participants & Live Scores</h3>
-            <p className="text-xs text-slate-400">
-              Real-time synchronization across all participating schools.
+            <h2 className="text-base font-bold text-slate-900">Participant Telemetry & Standings</h2>
+            <p className="text-xs text-slate-500">
+              Live roster with verified student scores, rankings, and qualification flags. Click any student to audit answers.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Search */}
+          {/* Search & Filters */}
+          <div className="flex items-center gap-3 flex-wrap">
             <div className="relative">
-              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search student or school..."
-                className="pl-9 pr-3 py-2 bg-[#0B1020] border border-[#22304C] rounded-xl text-xs text-white placeholder-slate-500 outline-none w-52 focus:border-indigo-500"
+                placeholder="Search candidate or school..."
+                className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 text-slate-900"
               />
             </div>
 
-            {/* Filter School */}
-            <select
-              value={selectedSchool}
-              onChange={(e) => setSelectedSchool(e.target.value)}
-              className="px-3 py-2 bg-[#0B1020] border border-[#22304C] rounded-xl text-xs text-slate-300 outline-none focus:border-indigo-500 cursor-pointer"
-            >
-              <option value="all">All Schools</option>
-              {uniqueSchools.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-
-            {/* Filter Class */}
             <select
               value={selectedClass}
               onChange={(e) => setSelectedClass(e.target.value)}
-              className="px-3 py-2 bg-[#0B1020] border border-[#22304C] rounded-xl text-xs text-slate-300 outline-none focus:border-indigo-500 cursor-pointer"
+              className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 focus:outline-none"
             >
               <option value="all">All Classes</option>
               <option value="11th">Class 11th</option>
               <option value="12th">Class 12th</option>
             </select>
-
-            {/* Export CSV */}
-            <button
-              onClick={handleExportCSV}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#0B1020] border border-[#22304C] hover:border-slate-600 text-slate-200 transition-all cursor-pointer"
-            >
-              <Download className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Export CSV</span>
-            </button>
           </div>
         </div>
 
-        {/* Table */}
-        <div className="overflow-x-auto rounded-xl border border-[#22304C]">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-[#0B1020] text-slate-400 font-mono uppercase text-[10px] tracking-wider border-b border-[#22304C]">
-              <tr>
+        {/* Table Container */}
+        <div className="overflow-x-auto mt-4">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="border-b border-slate-100 text-[11px] font-bold uppercase tracking-wider text-slate-500 bg-slate-50/70">
                 <th className="py-3 px-4">Rank</th>
-                <th className="py-3 px-4">Participant ID</th>
-                <th className="py-3 px-4">Student Name</th>
+                <th className="py-3 px-4">Candidate</th>
                 <th className="py-3 px-4">School</th>
                 <th className="py-3 px-4">Class</th>
-                <th className="py-3 px-4 text-center">Round 1</th>
-                <th className="py-3 px-4 text-center">Round 2</th>
-                <th className="py-3 px-4 text-center">Total Score</th>
-                <th className="py-3 px-4 text-right">Correct</th>
+                <th className="py-3 px-4 font-mono text-center">R1 Score</th>
+                <th className="py-3 px-4 font-mono text-center">R2 Score</th>
+                <th className="py-3 px-4 font-mono text-center">Total</th>
+                <th className="py-3 px-4 text-center">Fullscreen Exits</th>
+                <th className="py-3 px-4 text-center">Round 2 Status</th>
+                <th className="py-3 px-4 text-right">Audit</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#19243A]">
+            <tbody className="divide-y divide-slate-100 text-xs">
               {filteredLeaderboard.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-slate-500">
-                    No participants registered yet. Use "Seed 60 Mock Students" or open registration.
+                  <td colSpan={10} className="py-8 text-center text-slate-400">
+                    No participants registered or matched your filters.
                   </td>
                 </tr>
               ) : (
                 filteredLeaderboard.map((row) => {
-                  const part = participants.find((p) => p.id === row.participant_id);
+                  const r1Attempt = competitionService.getActiveExamAttempt(row.participant_id, 1);
+                  const r2Attempt = competitionService.getActiveExamAttempt(row.participant_id, 2);
+                  const totalExits = (r1Attempt?.fullscreenExitCount || 0) + (r2Attempt?.fullscreenExitCount || 0);
+
                   return (
-                    <tr key={row.participant_id} className="hover:bg-[#162136] transition-colors">
-                      <td className="py-3 px-4 font-mono font-bold text-indigo-300">
+                    <tr 
+                      key={row.participant_id} 
+                      className="hover:bg-slate-50/80 transition-colors cursor-pointer group"
+                      onClick={() => {
+                        setAuditParticipantId(row.participant_id);
+                        setAuditStudentName(row.student_name);
+                      }}
+                    >
+                      <td className="py-3 px-4 font-mono font-bold text-slate-800">
                         #{row.rank}
                       </td>
-                      <td className="py-3 px-4 font-mono text-cyan-400 font-medium">
-                        {part?.access_code || '—'}
-                      </td>
-                      <td className="py-3 px-4 font-semibold text-white">
+                      <td className="py-3 px-4 font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">
                         {row.student_name}
                       </td>
-                      <td className="py-3 px-4 text-slate-300 max-w-[200px] truncate">
+                      <td className="py-3 px-4 text-slate-600 font-medium">
                         {row.school_name}
                       </td>
-                      <td className="py-3 px-4">
-                        <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[11px] font-semibold">
-                          {row.student_class}
-                        </span>
+                      <td className="py-3 px-4 text-slate-600">
+                        Class {row.student_class}
                       </td>
-                      <td className="py-3 px-4 text-center font-mono font-semibold text-slate-300">
-                        {row.round_1_score}
+                      <td className="py-3 px-4 font-mono font-bold text-center text-indigo-700">
+                        {row.round_1_score} <span className="text-[10px] text-slate-400 font-normal">/ {row.round_1_max_marks}</span>
                       </td>
-                      <td className="py-3 px-4 text-center font-mono font-semibold text-slate-300">
-                        {row.round_2_score}
+                      <td className="py-3 px-4 font-mono font-bold text-center text-blue-700">
+                        {row.round_2_score} <span className="text-[10px] text-slate-400 font-normal">/ {row.round_2_max_marks}</span>
                       </td>
-                      <td className="py-3 px-4 text-center font-mono font-extrabold text-indigo-400 text-sm">
-                        {row.total_score}
+                      <td className="py-3 px-4 font-mono font-extrabold text-center text-slate-900">
+                        {row.total_score} <span className="text-[10px] text-slate-400 font-normal">({row.total_pct}%)</span>
                       </td>
-                      <td className="py-3 px-4 text-right font-mono text-slate-400">
-                        {row.correct_count} / 20
+                      <td className="py-3 px-4 text-center">
+                        {totalExits === 0 ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono">
+                            0 Exits
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-300 font-mono">
+                            {totalExits} Exits
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        {row.is_qualified ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono">
+                            Qualified
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 font-mono">
+                            Pending
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAuditParticipantId(row.participant_id);
+                            setAuditStudentName(row.student_name);
+                          }}
+                          className="p-1.5 rounded-lg border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 transition-colors cursor-pointer"
+                          title="Audit question-by-question scoring"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
                       </td>
                     </tr>
                   );
@@ -561,16 +701,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </div>
 
-      {/* Confirmation Reset Modal */}
+      {/* Student Attempt Question-by-Question Audit Modal */}
+      <StudentAuditModal
+        isOpen={!!auditParticipantId}
+        onClose={() => setAuditParticipantId(null)}
+        participantId={auditParticipantId}
+        studentName={auditStudentName}
+        adminToken={adminToken || undefined}
+      />
+
+      {/* Reset Confirmation Modal */}
       <ResetModal
         isOpen={isResetModalOpen}
         onClose={() => setIsResetModalOpen(false)}
         onConfirm={() => {
-          competitionService.resetCompetition();
+          competitionService.resetCompetition(adminToken || undefined);
           refreshData();
         }}
       />
     </div>
   );
 };
-

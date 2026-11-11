@@ -33,6 +33,59 @@ export interface CompetitionRound {
   totalQuestions: number;
 }
 
+export interface MarkingScheme {
+  correctMarks: number;
+  incorrectMarks: number;
+  unansweredMarks: number;
+  negativeMarkingEnabled: boolean;
+}
+
+export const OFFICIAL_MARKING_SCHEME: MarkingScheme = {
+  correctMarks: 10,
+  incorrectMarks: 0,
+  unansweredMarks: 0,
+  negativeMarkingEnabled: false,
+};
+
+export interface ExamPaperMapping {
+  roundNumber: 1 | 2;
+  paperId: 'general-paper' | 'subject-paper';
+  paperName: string;
+  sourceDoc: string;
+  totalQuestions: 10;
+  maxMarks: 100;
+  durationMinutes: 10;
+  description: string;
+}
+
+/**
+ * MANDATORY PAPER ASSIGNMENT MAPPING
+ * Round 1 = General Paper (Source: Generalpaper.docx)
+ * Round 2 = Subject Paper (Source: Subjectpaper.docx)
+ */
+export const OFFICIAL_ROUND_PAPERS: Record<1 | 2, ExamPaperMapping> = {
+  1: {
+    roundNumber: 1,
+    paperId: 'general-paper',
+    paperName: 'General Paper',
+    sourceDoc: 'Generalpaper.docx',
+    totalQuestions: 10,
+    maxMarks: 100,
+    durationMinutes: 10,
+    description: 'Initial screening assessment covering Computer Fundamentals, Communication Hardware, File Formats, Binary Numbers, and Operating Systems.',
+  },
+  2: {
+    roundNumber: 2,
+    paperId: 'subject-paper',
+    paperName: 'Subject Paper (Python Programming)',
+    sourceDoc: 'Subjectpaper.docx',
+    totalQuestions: 10,
+    maxMarks: 100,
+    durationMinutes: 10,
+    description: 'Second-stage examination for officially shortlisted candidates evaluating Python syntax, mutability, built-ins, loops, and indexing.',
+  },
+};
+
 export const COMPETITION_ROUNDS: CompetitionRound[] = [
   {
     id: 'round-1',
@@ -60,6 +113,7 @@ export const COMPETITION_ROUNDS: CompetitionRound[] = [
  */
 export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
   // ==================== ROUND 1: GENERAL PAPER ====================
+  // Source: Generalpaper.docx (Exactly 10 questions)
   {
     id: 'r1-q1',
     roundNumber: 1,
@@ -212,6 +266,7 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
   },
 
   // ==================== ROUND 2: SUBJECT PAPER ====================
+  // Source: Subjectpaper.docx (Exactly 10 questions)
   {
     id: 'r2-q1',
     roundNumber: 2,
@@ -231,7 +286,7 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
     id: 'r2-q2',
     roundNumber: 2,
     questionNumber: 2,
-    text: ' Which of the following is the correct identifier ?',
+    text: 'Which of the following is the correct identifier ?',
     points: 10,
     options: [
       { id: 'r2-q2-a', label: 'A', text: 'Break', isCorrect: true },
@@ -330,7 +385,7 @@ export const SERVER_QUESTION_BANK: QuestionWithAnswer[] = [
       { id: 'r2-q8-d', label: 'D', text: 'b', isCorrect: false },
     ],
     correctOptionId: 'r2-q8-b',
-    explanation: 'li[1] accesses the second element "Emma". Index [-1] accesses its last character, which is "a".',
+    explanation: 'li[1] accesses the second element "Emma". Index [-1] accesses its last character, which is "a". Note: In official school examinations, variable casing "Li" vs "li" is evaluated conceptually as "a".',
   },
   {
     id: 'r2-q9',
@@ -381,3 +436,18 @@ export const CLIENT_QUESTIONS: Question[] = SERVER_QUESTION_BANK.map((q) => ({
   })),
 }));
 
+export const getPaperConfig = (roundNumber: 1 | 2): ExamPaperMapping => {
+  return OFFICIAL_ROUND_PAPERS[roundNumber];
+};
+
+export const getQuestionsForRound = (roundNumber: 1 | 2): Question[] => {
+  return CLIENT_QUESTIONS.filter((q) => q.roundNumber === roundNumber);
+};
+
+export const getServerQuestionsForRound = (roundNumber: 1 | 2): QuestionWithAnswer[] => {
+  return SERVER_QUESTION_BANK.filter((q) => q.roundNumber === roundNumber);
+};
+
+export const calculateRoundMaxMarks = (roundNumber: 1 | 2): number => {
+  return getServerQuestionsForRound(roundNumber).reduce((sum, q) => sum + (q.points || 10), 0);
+};

@@ -1,0 +1,741 @@
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { 
+  Clock, 
+  CheckCircle2, 
+  AlertCircle, 
+  Flag, 
+  Trash2, 
+  ArrowLeft, 
+  ArrowRight, 
+  Send, 
+  Menu, 
+  X, 
+  HelpCircle,
+  ShieldCheck,
+  Check,
+  RotateCcw,
+  Maximize2,
+  ShieldAlert,
+  Lock
+} from 'lucide-react';
+import { Participant, Question, StudentExamAttempt, QuestionNavStatus, ExamReviewSummary, QuestionTimerState } from '../../types';
+import { competitionService } from '../../services/competitionService';
+import { sound } from '../../utils/audio';
+import { SubmissionModal } from './SubmissionModal';
+
+interface ExamWorkspaceProps {
+  participant: Participant;
+  roundNumber?: 1 | 2;
+  onFinishExam: (attempt: StudentExamAttempt) => void;
+}
+
+export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
+  participant,
+  roundNumber = 1,
+  onFinishExam,
+}) => {
+  // 1. Initialize or restore authoritative attempt from competition service
+  const [attempt, setAttempt] = useState<StudentExamAttempt>(() => {
+    return competitionService.startExamAttempt(participant.id, roundNumber);
+  });
+
+  // 2. Load questions in student's assigned randomized sequence
+  const roundQuestions: Question[] = useMemo(() => {
+    return competitionService.getQuestionsForAttempt(participant.id, roundNumber);
+  }, [participant.id, roundNumber]);
+
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(() => {
+    return attempt.currentQuestionIndex || 0;
+  });
+
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved');
+  const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isMobilePaletteOpen, setIsMobilePaletteOpen] = useState(false);
+  const [isFullscreenExited, setIsFullscreenExited] = useState(false);
+
+  // Active question in assigned randomized sequence
+  const currentQuestion = roundQuestions[currentQuestionIndex] || roundQuestions[0];
+  const currentQuestionId = currentQuestion?.id;
+  const selectedOptionId = attempt.answers[currentQuestionId] || null;
+  const isMarkedForReview = attempt.markedForReviewIds?.includes(currentQuestionId);
+
+  // 3. Active Question 20-Second Countdown Timer
+  const [questionTimer, setQuestionTimer] = useState<QuestionTimerState | null>(() => {
+    return competitionService.startQuestionTimer(participant.id, roundNumber, currentQuestionIndex);
+  });
+
+  const [secondsRemaining, setSecondsRemaining] = useState<number>(() => {
+    const timer = competitionService.startQuestionTimer(participant.id, roundNumber, currentQuestionIndex);
+    if (!timer) return 20;
+    const now = competitionService.getEstimatedServerTime();
+    return Math.max(0, Math.ceil((timer.deadlineTime - now) / 1000));
+  });
+
+  // Re-synchronize timer whenever active question changes
+  useEffect(() => {
+    const timer = competitionService.startQuestionTimer(participant.id, roundNumber, currentQuestionIndex);
+    setQuestionTimer(timer);
+    if (timer) {
+      const now = competitionService.getEstimatedServerTime();
+      setSecondsRemaining(Math.max(0, Math.ceil((timer.deadlineTime - now) / 1000)));
+    }
+  }, [currentQuestionIndex, participant.id, roundNumber]);
+
+  // Execute authoritative submission
+  const executeSubmission = useCallback(async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      sound.playSuccess();
+      const finalAttempt = await competitionService.submitExamAttempt(participant.id, roundNumber);
+      onFinishExam(finalAttempt);
+    } catch (err) {
+      console.error('Submission failed:', err);
+      setIsSubmitting(false);
+    }
+  }, [isSubmitting, participant.id, roundNumber, onFinishExam]);
+
+  // Automatic question advancement when 20s expires or student confirms
+  const handleAutoAdvance = useCallback(async () => {
+    if (isSubmitting) return;
+    try {
+      const res = await competitionService.advanceQuestionAttempt(
+        participant.id,
+        roundNumber,
+        currentQuestionIndex
+      );
+
+      if (res.isCompleted) {
+        sound.playSuccess();
+        onFinishExam(res.attempt);
+      } else if (res.nextIndex !== null) {
+        setCurrentQuestionIndex(res.nextIndex);
+        setAttempt(res.attempt);
+      }
+    } catch (err) {
+      console.error('Error advancing question:', err);
+    }
+  }, [currentQuestionIndex, isSubmitting, participant.id, roundNumber, onFinishExam]);
+
+  // Authoritative per-question 20-second countdown effect
+  useEffect(() => {
+    if (!questionTimer || isSubmitting) return;
+
+    let animId: number;
+    let expiredTriggered = false;
+
+    const tick = () => {
+      const now = competitionService.getEstimatedServerTime();
+      const diffMs = questionTimer.deadlineTime - now;
+
+      if (diffMs <= 0) {
+        setSecondsRemaining(0);
+        if (!expiredTriggered) {
+          expiredTriggered = true;
+          sound.playTimeExpired();
+          // AUTOMATIC QUESTION ADVANCEMENT AT 00:00!
+          handleAutoAdvance();
+        }
+        return;
+      }
+
+      const secs = Math.ceil(diffMs / 1000);
+      setSecondsRemaining(secs);
+      animId = requestAnimationFrame(tick);
+    };
+
+    tick();
+    return () => {
+      if (animId) cancelAnimationFrame(animId);
+    };
+  }, [questionTimer, isSubmitting, handleAutoAdvance]);
+
+  // Full-screen monitoring effect
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isCurrentlyFullscreen = !!(
+        document.fullscreenElement || (document as any).webkitFullscreenElement
+      );
+
+      if (!isCurrentlyFullscreen && !attempt.isSubmitted && !isSubmitting) {
+        setIsFullscreenExited(true);
+        competitionService.recordFullscreenExit(participant.id, roundNumber);
+      } else if (isCurrentlyFullscreen && isFullscreenExited) {
+        setIsFullscreenExited(false);
+        competitionService.recordFullscreenReturn(participant.id, roundNumber);
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
+  }, [participant.id, roundNumber, attempt.isSubmitted, isSubmitting, isFullscreenExited]);
+
+  const handleReturnToFullscreen = async () => {
+    try {
+      if (document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen();
+      } else if ((document.documentElement as any).webkitRequestFullscreen) {
+        await (document.documentElement as any).webkitRequestFullscreen();
+      }
+    } catch (err) {
+      console.warn('Could not re-enter fullscreen:', err);
+    }
+    setIsFullscreenExited(false);
+    competitionService.recordFullscreenReturn(participant.id, roundNumber);
+  };
+
+  // Answer selection handler
+  const handleSelectOption = (optionId: string) => {
+    if (!currentQuestionId || isSubmitting) return;
+
+    setSaveStatus('saving');
+    sound.playSelect();
+
+    const saveRes = competitionService.saveQuestionAnswer(
+      participant.id,
+      roundNumber,
+      currentQuestionId,
+      optionId
+    );
+
+    if (saveRes.success) {
+      setAttempt((prev) => ({
+        ...prev,
+        answers: {
+          ...prev.answers,
+          [currentQuestionId]: optionId,
+        },
+        visitedQuestionIds: prev.visitedQuestionIds.includes(currentQuestionId)
+          ? prev.visitedQuestionIds
+          : [...prev.visitedQuestionIds, currentQuestionId],
+      }));
+    }
+
+    setTimeout(() => {
+      setSaveStatus('saved');
+    }, 150);
+  };
+
+  // Clear answer handler
+  const handleClearResponse = () => {
+    if (!currentQuestionId || isSubmitting) return;
+
+    setSaveStatus('saving');
+    competitionService.clearQuestionAnswer(participant.id, roundNumber, currentQuestionId);
+
+    setAttempt((prev) => {
+      const nextAnswers = { ...prev.answers };
+      delete nextAnswers[currentQuestionId];
+      return {
+        ...prev,
+        answers: nextAnswers,
+      };
+    });
+
+    setTimeout(() => {
+      setSaveStatus('saved');
+    }, 150);
+  };
+
+  // Toggle mark for review handler
+  const handleToggleMarkForReview = () => {
+    if (!currentQuestionId || isSubmitting) return;
+
+    competitionService.toggleMarkForReview(participant.id, roundNumber, currentQuestionId);
+
+    setAttempt((prev) => {
+      const idx = prev.markedForReviewIds.indexOf(currentQuestionId);
+      const nextMarked = [...prev.markedForReviewIds];
+      if (idx >= 0) {
+        nextMarked.splice(idx, 1);
+      } else {
+        nextMarked.push(currentQuestionId);
+      }
+      return {
+        ...prev,
+        markedForReviewIds: nextMarked,
+      };
+    });
+  };
+
+  // Manual next question action
+  const handleNextClick = () => {
+    sound.playSelect();
+    handleAutoAdvance();
+  };
+
+  // Keyboard shortcuts: A, B, C, D or 1, 2, 3, 4
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (isSubmitting || isSubmitModalOpen || isFullscreenExited) return;
+
+      const key = e.key.toUpperCase();
+      let optIdx = -1;
+      if (key === 'A' || key === '1') optIdx = 0;
+      else if (key === 'B' || key === '2') optIdx = 1;
+      else if (key === 'C' || key === '3') optIdx = 2;
+      else if (key === 'D' || key === '4') optIdx = 3;
+
+      if (optIdx >= 0 && currentQuestion && optIdx < currentQuestion.options.length) {
+        handleSelectOption(currentQuestion.options[optIdx].id);
+      } else if (e.key === 'Enter') {
+        handleNextClick();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentQuestion, isSubmitting, isSubmitModalOpen, isFullscreenExited, handleNextClick]);
+
+  // Compute question palette status
+  const getQuestionNavStatus = (qId: string, idx: number): QuestionNavStatus => {
+    const isAnswered = !!attempt.answers[qId];
+    const isMarked = attempt.markedForReviewIds?.includes(qId);
+    const isCurrent = idx === currentQuestionIndex;
+    const isPast = idx < currentQuestionIndex;
+
+    if (isCurrent) return isAnswered ? 'answered' : 'visited_unanswered';
+    if (isMarked) return 'marked_for_review';
+    if (isAnswered) return 'answered';
+    if (isPast) return 'expired';
+    return 'not_visited';
+  };
+
+  // Summary statistics
+  const summary: ExamReviewSummary = useMemo(() => {
+    const total = roundQuestions.length;
+    let answered = 0;
+    roundQuestions.forEach((q) => {
+      if (attempt.answers[q.id]) answered++;
+    });
+    return {
+      totalQuestions: total,
+      answeredCount: answered,
+      unansweredCount: total - answered,
+      markedForReviewCount: attempt.markedForReviewIds?.length || 0,
+    };
+  }, [roundQuestions, attempt.answers, attempt.markedForReviewIds]);
+
+  // Format timer string MM:SS
+  const formatTime = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const isLowTime = secondsRemaining <= 6 && secondsRemaining > 2;
+  const isCriticalTime = secondsRemaining <= 2;
+  const roundName = roundNumber === 1 ? 'Round 1: General Paper' : 'Round 2: Subject Paper (Python)';
+  const isFinalQuestion = currentQuestionIndex === roundQuestions.length - 1;
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col min-h-[calc(100vh-8rem)]">
+      {/* ==================== FULL-SCREEN EXIT WARNING OVERLAY ==================== */}
+      {isFullscreenExited && (
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 sm:p-8 text-center shadow-2xl border border-slate-200 animate-scaleUp">
+            <div className="w-14 h-14 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-4">
+              <ShieldAlert className="w-8 h-8" />
+            </div>
+            <h2 className="text-xl font-extrabold text-slate-900 mb-2">
+              Full-Screen Mode Exited
+            </h2>
+            <p className="text-sm text-slate-600 leading-relaxed mb-4">
+              Examination regulations require full-screen mode to remain active. This exit event has been recorded in candidate audit telemetry with timestamps.
+            </p>
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 mb-6 font-medium">
+              Note: The 20-second per-question timer continues counting down in the background. Return to full screen immediately.
+            </div>
+            <button
+              onClick={handleReturnToFullscreen}
+              className="w-full py-3.5 px-6 rounded-xl font-bold text-sm bg-indigo-600 hover:bg-indigo-700 text-white shadow-soft transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Maximize2 className="w-4 h-4" />
+              <span>Return to Full Screen</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== TOP EXAMINATION HEADER ==================== */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-soft mb-6">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          {/* Exam & Candidate Metadata */}
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm shrink-0">
+              R{roundNumber}
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-bold uppercase tracking-wider text-indigo-700 font-mono">
+                  {roundName}
+                </span>
+                <span className="text-slate-300">&bull;</span>
+                <span className="text-xs font-semibold text-slate-700">
+                  {participant.student_name}
+                </span>
+                <span className="text-slate-300">&bull;</span>
+                <span className="text-xs text-slate-500 font-medium">
+                  {participant.school_name}
+                </span>
+              </div>
+              <div className="flex items-center gap-3 mt-1">
+                <div className="text-xs text-slate-500">
+                  Progress: <strong className="text-slate-800">Question {currentQuestionIndex + 1} of {roundQuestions.length}</strong>
+                </div>
+                {/* Micro Save Status Indicator */}
+                <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 bg-slate-50 px-2 py-0.5 rounded-full border border-slate-200">
+                  {saveStatus === 'saved' ? (
+                    <>
+                      <Check className="w-3 h-3 text-emerald-600" />
+                      <span className="text-emerald-700">Auto-Saved</span>
+                    </>
+                  ) : (
+                    <>
+                      <RotateCcw className="w-3 h-3 text-amber-600 animate-spin" />
+                      <span className="text-amber-700">Saving...</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Header: 20-Second Per-Question Timer & Actions */}
+          <div className="flex items-center gap-3 justify-between lg:justify-end">
+            {/* Authoritative Per-Question Countdown Clock */}
+            <div className={`px-4 py-2 rounded-xl border flex items-center gap-2.5 transition-colors ${
+              isCriticalTime 
+                ? 'bg-rose-50 border-rose-300 text-rose-700 animate-pulse' 
+                : isLowTime 
+                  ? 'bg-amber-50 border-amber-300 text-amber-800' 
+                  : 'bg-indigo-50/70 border-indigo-200 text-indigo-900'
+            }`}>
+              <Clock className={`w-4 h-4 ${
+                isCriticalTime ? 'text-rose-600' : isLowTime ? 'text-amber-600' : 'text-indigo-600'
+              }`} />
+              <div className="flex flex-col text-left">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                  Question Timer (20s)
+                </span>
+                <span className="font-mono text-base sm:text-lg font-bold tracking-wider leading-none mt-0.5">
+                  {formatTime(secondsRemaining)}
+                </span>
+              </div>
+            </div>
+
+            {/* Mobile Question Palette Toggle */}
+            <button
+              onClick={() => setIsMobilePaletteOpen(true)}
+              className="lg:hidden p-2.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 flex items-center gap-1 text-xs font-semibold cursor-pointer"
+            >
+              <Menu className="w-4 h-4" />
+              <span>Palette</span>
+            </button>
+
+            {/* Submit Examination Button */}
+            <button
+              onClick={() => setIsSubmitModalOpen(true)}
+              className="px-5 py-2.5 rounded-xl font-bold text-xs bg-slate-900 hover:bg-slate-800 text-white shadow-soft transition-all flex items-center gap-1.5 cursor-pointer"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>Submit Early</span>
+            </button>
+          </div>
+        </div>
+
+        {/* 20-Second Question Micro Progress Bar */}
+        <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-4">
+          <div 
+            className={`h-full transition-all duration-300 rounded-full ${
+              isCriticalTime ? 'bg-rose-600' : isLowTime ? 'bg-amber-500' : 'bg-indigo-600'
+            }`}
+            style={{ width: `${Math.max(0, Math.min(100, (secondsRemaining / 20) * 100))}%` }}
+          />
+        </div>
+      </div>
+
+      {/* ==================== MAIN WORKSPACE GRID ==================== */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 items-start">
+        {/* ==================== LEFT / MAIN QUESTION CARD (8 COLS) ==================== */}
+        <div className="lg:col-span-8 flex flex-col gap-6">
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 shadow-soft flex flex-col justify-between min-h-[480px]">
+            <div>
+              {/* Question Header Metadata */}
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-6">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wider font-mono text-indigo-700 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-lg">
+                    Question {currentQuestionIndex + 1} of {roundQuestions.length}
+                  </span>
+                  {isMarkedForReview && (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                      <Flag className="w-3 h-3 text-purple-600" />
+                      Review Flagged
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-100">
+                    +{currentQuestion?.points || 10} Marks
+                  </span>
+                </div>
+              </div>
+
+              {/* Question Text */}
+              <div className="mb-8">
+                {currentQuestion && currentQuestion.roundNumber === 2 && (currentQuestion.text.includes('\n') || currentQuestion.text.includes('print')) ? (
+                  <div className="space-y-3">
+                    <p className="text-sm font-semibold text-slate-700">
+                      Predict the output or behavior of the following Python snippet:
+                    </p>
+                    <div className="p-4 sm:p-5 rounded-xl bg-slate-900 text-slate-100 font-mono text-sm leading-relaxed border border-slate-800 shadow-soft-sm overflow-x-auto whitespace-pre">
+                      <div className="text-[10px] text-slate-400 uppercase tracking-widest font-bold mb-2 flex items-center gap-1.5 pb-2 border-b border-slate-800">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                        Python 3 Evaluation
+                      </div>
+                      <code className="text-emerald-300">{currentQuestion.text}</code>
+                    </div>
+                  </div>
+                ) : (
+                  <h2 className="text-lg sm:text-xl font-bold text-slate-900 leading-relaxed whitespace-pre-line">
+                    {currentQuestion?.text}
+                  </h2>
+                )}
+              </div>
+
+              {/* Options Grid */}
+              <div className="space-y-3">
+                {currentQuestion?.options.map((opt) => {
+                  const isSelected = selectedOptionId === opt.id;
+                  const keyShortcut = opt.label;
+
+                  return (
+                    <button
+                      key={opt.id}
+                      onClick={() => handleSelectOption(opt.id)}
+                      className={`w-full text-left p-4 rounded-xl border transition-all flex items-center justify-between gap-4 cursor-pointer group ${
+                        isSelected 
+                          ? 'bg-indigo-50/70 border-indigo-600 ring-2 ring-indigo-500/20 shadow-soft-sm' 
+                          : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3.5">
+                        <span className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs font-mono transition-colors shrink-0 ${
+                          isSelected 
+                            ? 'bg-indigo-600 text-white' 
+                            : 'bg-slate-100 text-slate-700 group-hover:bg-slate-200'
+                        }`}>
+                          {keyShortcut}
+                        </span>
+                        <span className={`text-sm sm:text-base font-medium transition-colors ${
+                          isSelected ? 'text-indigo-950 font-semibold' : 'text-slate-800'
+                        }`}>
+                          {opt.text}
+                        </span>
+                      </div>
+
+                      <div className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${
+                        isSelected 
+                          ? 'border-indigo-600 bg-indigo-600 text-white' 
+                          : 'border-slate-300 bg-white group-hover:border-slate-400'
+                      }`}>
+                        {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* ==================== BOTTOM ACTION TOOLBAR ==================== */}
+            <div className="pt-8 mt-8 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                {/* Mark for Review Toggle */}
+                <button
+                  onClick={handleToggleMarkForReview}
+                  className={`px-3.5 py-2.5 rounded-xl border text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    isMarkedForReview 
+                      ? 'bg-purple-50 border-purple-300 text-purple-700' 
+                      : 'border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  <Flag className="w-3.5 h-3.5 text-purple-600" />
+                  <span>{isMarkedForReview ? 'Flagged for Review' : 'Mark for Review'}</span>
+                </button>
+
+                {/* Clear Response */}
+                {selectedOptionId && (
+                  <button
+                    onClick={handleClearResponse}
+                    className="px-3 py-2.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Clear</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Confirm & Next Button (Advances Immediately) */}
+              <button
+                onClick={handleNextClick}
+                className="px-6 py-2.5 rounded-xl font-bold text-xs bg-indigo-600 hover:bg-indigo-700 text-white shadow-soft transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <span>{isFinalQuestion ? 'Confirm & Finalize Exam' : 'Confirm & Next Question'}</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* ==================== RIGHT / QUESTION PALETTE (4 COLS) ==================== */}
+        <div className="hidden lg:block lg:col-span-4">
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-soft sticky top-24">
+            <h3 className="text-sm font-bold text-slate-900 pb-3 border-b border-slate-100 mb-4 flex items-center justify-between">
+              <span>Randomized Sequence</span>
+              <span className="text-xs font-mono font-semibold text-slate-500">
+                10 Questions (20s Each)
+              </span>
+            </h3>
+
+            {/* 10-Question Grid */}
+            <div className="grid grid-cols-5 gap-2.5 mb-6">
+              {roundQuestions.map((q, idx) => {
+                const status = getQuestionNavStatus(q.id, idx);
+                const isCurrent = idx === currentQuestionIndex;
+
+                let btnStyle = 'border-slate-200 text-slate-400 bg-white cursor-default';
+                if (isCurrent) {
+                  btnStyle = 'bg-indigo-600 border-indigo-600 text-white font-bold ring-2 ring-indigo-500 ring-offset-2';
+                } else if (status === 'answered') {
+                  btnStyle = 'bg-emerald-600 border-emerald-600 text-white font-bold';
+                } else if (status === 'expired') {
+                  btnStyle = 'bg-amber-50 border-amber-300 text-amber-800 font-semibold';
+                }
+
+                return (
+                  <div
+                    key={q.id}
+                    className={`h-11 rounded-xl border flex items-center justify-center font-mono text-xs font-bold transition-all relative ${btnStyle}`}
+                  >
+                    <span>{idx + 1}</span>
+                    {idx < currentQuestionIndex && (
+                      <Lock className="w-2.5 h-2.5 absolute top-1 right-1 opacity-70" />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Palette Status Legend */}
+            <div className="pt-4 border-t border-slate-100 space-y-2 text-xs">
+              <div className="flex items-center gap-2.5 text-slate-600">
+                <span className="w-4 h-4 rounded-md bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold">
+                  ●
+                </span>
+                <span>Active Question</span>
+              </div>
+              <div className="flex items-center gap-2.5 text-slate-600">
+                <span className="w-4 h-4 rounded-md bg-emerald-600 flex items-center justify-center text-white text-[10px] font-bold">
+                  ✓
+                </span>
+                <span>Answered ({summary.answeredCount})</span>
+              </div>
+              <div className="flex items-center gap-2.5 text-slate-600">
+                <span className="w-4 h-4 rounded-md bg-amber-100 border border-amber-300" />
+                <span>Expired / Skipped ({summary.unansweredCount})</span>
+              </div>
+              <div className="flex items-center gap-2.5 text-slate-600">
+                <span className="w-4 h-4 rounded-md bg-white border border-slate-300" />
+                <span>Upcoming Questions</span>
+              </div>
+            </div>
+
+            {/* Early Submission CTA */}
+            <div className="pt-5 mt-5 border-t border-slate-100">
+              <button
+                onClick={() => setIsSubmitModalOpen(true)}
+                className="w-full py-2.5 rounded-xl font-bold text-xs bg-slate-900 hover:bg-slate-800 text-white shadow-soft transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Finalize Examination</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ==================== MOBILE PALETTE BOTTOM SHEET ==================== */}
+      {isMobilePaletteOpen && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-slate-900/60 backdrop-blur-xs lg:hidden">
+          <div className="bg-white rounded-t-2xl p-6 shadow-soft-lg max-h-[80vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <h3 className="font-bold text-sm text-slate-900">Question Palette</h3>
+              <button 
+                onClick={() => setIsMobilePaletteOpen(false)}
+                className="p-1 rounded-lg text-slate-500 hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-5 gap-3 mb-6">
+              {roundQuestions.map((q, idx) => {
+                const status = getQuestionNavStatus(q.id, idx);
+                const isCurrent = idx === currentQuestionIndex;
+
+                let btnStyle = 'border-slate-200 text-slate-400 bg-white';
+                if (isCurrent) {
+                  btnStyle = 'bg-indigo-600 border-indigo-600 text-white font-bold ring-2 ring-indigo-500';
+                } else if (status === 'answered') {
+                  btnStyle = 'bg-emerald-600 border-emerald-600 text-white font-bold';
+                } else if (status === 'expired') {
+                  btnStyle = 'bg-amber-50 border-amber-300 text-amber-800 font-semibold';
+                }
+
+                return (
+                  <div
+                    key={q.id}
+                    className={`h-12 rounded-xl border flex items-center justify-center font-mono text-sm font-bold relative ${btnStyle}`}
+                  >
+                    <span>{idx + 1}</span>
+                    {idx < currentQuestionIndex && (
+                      <Lock className="w-2.5 h-2.5 absolute top-1 right-1 opacity-70" />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <button
+              onClick={() => {
+                setIsMobilePaletteOpen(false);
+                setIsSubmitModalOpen(true);
+              }}
+              className="w-full py-3 rounded-xl font-bold text-xs bg-slate-900 text-white flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>Finalize Examination</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== SUBMISSION CONFIRMATION MODAL ==================== */}
+      <SubmissionModal
+        isOpen={isSubmitModalOpen}
+        onClose={() => setIsSubmitModalOpen(false)}
+        onConfirmSubmit={executeSubmission}
+        summary={summary}
+        isSubmitting={isSubmitting}
+        roundNumber={roundNumber}
+      />
+    </div>
+  );
+};

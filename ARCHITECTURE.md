@@ -1,98 +1,109 @@
-# Quizmania System Architecture Specification
+# QUIZMANIA SYSTEM ARCHITECTURE SPECIFICATION
+**Version:** 2.1 (Two-Round Secure Edition)  
+**Status:** Implemented & Production-Ready  
+
+---
 
 ## 1. Executive Architecture Summary
 
-Quizmania is architected as an **authoritative-backend, thin-client examination engine**.
-Unlike recreational quiz applications that trust client clocks or broadcast high-frequency countdown ticks over WebSockets, Quizmania relies on:
-1. **Clock synchronization** with estimated server drift ($\Delta = t_{\text{server}} - t_{\text{client}}$).
-2. **Deterministic deadlines** published once per question.
-3. **Local continuous rendering** of countdown using `requestAnimationFrame`.
-4. **Server-side deadline verification** upon answer arrival.
+QuizMania is architected as an **authoritative-backend, thin-client examination engine** specifically built for high-stakes school technical quiz tournaments.
+
+### Core Architectural Pillars:
+1. **Strict Paper-to-Round Mapping:**
+   - **Round 1:** General Paper (`Generalpaper.docx`, 10 questions on Computer Fundamentals).
+   - **Round 2:** Subject Paper (`Subjectpaper.docx`, 10 questions on Python Programming).
+2. **Server-Side Unique Question Shuffling:**
+   - Every candidate receives an independently randomized question sequence ($10! = 3,628,800$ possible permutations).
+   - Sequence uniqueness enforced across the active cohort.
+   - Assigned sequence persisted in candidate attempt; **never re-shuffled on refresh**.
+3. **Strict 20-Second Per-Question Timer:**
+   - Independent 20-second allowance for each question (nominal total: 200 seconds for 10 questions).
+   - Authoritative timestamps prevent client clock manipulation.
+   - Expiration at 00:00 automatically locks question and advances to the next question in the sequence.
+4. **Mandatory Full-Screen Mode & Telemetry:**
+   - Full-screen requested on Start Examination click.
+   - Exit detection with prominent warning overlay and single-click return.
+   - Itemized exit logging with timestamps in audit telemetry.
+5. **Role-Based Access Control (RBAC):**
+   - Explicit `STUDENT` vs `ADMIN` roles.
+   - Cryptographic 64-character session tokens (`agt_...`) with 2-hour expiration.
+   - 5-failure brute force lockout defense.
+   - All administrative mutations protected server-side.
+
+---
+
+## 2. High-Level System Architecture Diagram
 
 ```
-┌────────────────┐                     ┌────────────────────────────┐
-│ Admin Console  │                     │   Authoritative Backend    │
-│ (Controller)   │                     │  (Supabase / PostgreSQL)   │
-└───────┬────────┘                     └─────────────┬──────────────┘
-        │ 1. Release Question i                      │
-        ├───────────────────────────────────────────>│ Sets start_time = now()
-        │                                            │ Sets deadline = now() + 20s
-        │                                            │
-        │ 2. Broadcasts Event via Realtime Channel   │
-        │<───────────────────────────────────────────┤
-        │                                            │
-┌───────┴────────┐                                   │
-│ Student Portal │                                   │
-│ (60+ Clients)  │                                   │
-└───────┬────────┘                                   │
-        │ 3. Receives event: calculates remaining   │
-        │    remaining = deadline - estimated_time   │
-        │                                            │
-        │ 4. Taps Option Card (Lock Answer)          │
-        ├───────────────────────────────────────────>│ 5. Validates:
-        │                                            │    - Competition in progress
-        │                                            │    - Question matches current
-        │                                            │    - now() <= deadline + 500ms
-        │                                            │    - Unique(question_id, student_id)
-        │ 6. Response: { success: true }             │
-        │<───────────────────────────────────────────┤
+┌────────────────────────────────────────────────────────┐
+│               CLIENT APPLICATION LAYER                 │
+│         React 19 • TypeScript • Tailwind CSS 4         │
+└───────────────────────────┬────────────────────────────┘
+                            │
+          ┌─────────────────┴─────────────────┐
+          ▼                                   ▼
+┌───────────────────┐               ┌────────────────────┐
+│   Student Portal  │               │  Admin Dashboard   │
+│ • Fullscreen Gate │               │ • RBAC Auth Gate   │
+│ • 20s Workspace   │               │ • Cutoff Adjuster  │
+│ • Palette Stepper │               │ • Telemetry Audit  │
+└─────────┬─────────┘               └─────────┬──────────┘
+          │                                   │
+          ▼                                   ▼
+┌────────────────────────────────────────────────────────┐
+│                COMPETITION SERVICE CORE                │
+│ • Randomization Engine (Fisher-Yates + Cohort Unique)  │
+│ • Per-Question 20s Authoritative Timer Machine         │
+│ • Scoring Engine (Position-Independent ID Evaluation)   │
+│ • Multi-Tier Deterministic Ranker                      │
+│ • Full-Screen Telemetry Logger                         │
+└───────────────────────────┬────────────────────────────┘
+                            │
+          ┌─────────────────┴─────────────────┐
+          ▼                                   ▼
+┌───────────────────┐               ┌────────────────────┐
+│ Local Sync Engine │               │   Supabase Cloud   │
+│ (In-Memory/Storage│               │  (PostgreSQL + RLS │
+│ + BroadcastChannel│               │   + RPC Functions) │
+└───────────────────┘               └────────────────────┘
 ```
 
 ---
 
-## 2. Server-Authoritative Timer Implementation
+## 3. Server-Authoritative Per-Question Timing Engine
 
-### The Problem with Client Timers
-Traditional web quizzes rely on `setInterval(() => setTimer(t - 1), 1000)`. This pattern fails in competitive scenarios because:
-- Browsers throttle background tabs to 1 execution per second or slower.
-- Users can manipulate JavaScript execution via browser developer tools.
-- Network latency causes clients to start at differing moments.
+When question $i$ is presented to candidate $C$:
+$$\text{firstDisplayedAt} = T_{\text{server}}$$
+$$\text{deadlineTime} = T_{\text{server}} + 20,000\text{ms}$$
 
-### Quizmania's Mathematical Solution
-When Question $k$ is released:
-$$\text{Deadline} = T_{\text{server\_release}} + 20.000\,\text{seconds}$$
+### Countdown & Lockout Policy:
+$$\text{Remaining}(t) = \max\left(0,\, \left\lceil \frac{\text{deadlineTime} - T_{\text{server}}}{1000} \right\rceil\right)$$
 
-During the handshake, the client calculates its clock offset:
-$$\Delta = T_{\text{server}} - \left(T_{\text{client\_send}} + \frac{T_{\text{client\_receive}} - T_{\text{client\_send}}}{2}\right)$$
-
-At any point in time $t_{\text{client}}$, the exact remaining time is:
-$$\text{Remaining}(t) = \max\left(0,\, \text{Deadline} - (t_{\text{client}} + \Delta)\right)$$
-
-### Visual Alert Phases
-- **Normal Phase ($20\text{s} \ge t > 5\text{s}$):** Indigo/Cyan theme, steady linear bar.
-- **Warning Phase ($5\text{s} \ge t > 3\text{s}$):** Amber alert border, elevated contrast.
-- **Critical Phase ($3\text{s} \ge t > 0\text{s}$):** Crimson alert glow with pulsating border.
-- **Expired Phase ($t = 0\text{s}$):** Options lock immediately.
+- At $\text{Remaining}(t) = 0$:
+  1. Engine rejects any further answer modification (`isLocked = true`).
+  2. If unselected, records question as **Unanswered**.
+  3. Transitions automatically to Question $i + 1$.
+  4. Starts Question $i + 1$'s independent 20-second timer.
+  5. On Question 10 expiration, finalizes examination attempt and computes score.
 
 ---
 
-## 3. High-Concurrency & Anti-Congestion Strategy
+## 4. Multi-Tier Deterministic Tie-Breaking Algorithm
 
-During a 60-student competition, broadcasting countdown updates every second produces:
-$$60\,\text{clients} \times 1\,\text{message/sec} \times 20\,\text{sec} = 1,200\,\text{messages/question}$$
-For 20 questions, that is $24,000$ Realtime messages, creating connection saturation and lag.
-
-**Quizmania's Low-Overhead Strategy:**
-- Realtime messages are sent **only on state transitions** (1 message when a question starts, 1 when a round ends).
-- Total Realtime events across the entire 20-question competition: **under 30 messages**.
-- Answers are submitted as direct HTTPS/RPC POST requests with indexed write operations.
+1. **Tier 1:** Higher Total Marks across both rounds.
+2. **Tier 2:** Higher Subject Paper (Round 2 Python) Score.
+3. **Tier 3:** Higher General Paper (Round 1) Score.
+4. **Tier 4:** Lower Cumulative Correct Response Latency (faster candidate ranked higher).
+5. **Tier 5:** Alphabetical Full Name.
 
 ---
 
-## 4. Deterministic Tie-Breaking Algorithm
+## 5. Security & Isolation Matrix
 
-Ranks are computed strictly without human bias using the following cascade:
-
-1. **Total Points Awarded:** Candidate with highest overall points ranks higher.
-2. **Round 2 (Subject Paper) Score:** Tests mastery of core technical subject matter (Python Programming).
-3. **Total Latency / Response Speed:** Sum of server-recorded completion times across correct answers (lower is better).
-4. **Shared Rank:** If two candidates possess identical total score, identical Round 2 score, and identical speed down to the millisecond, they are awarded the same dense rank.
-
----
-
-## 5. Security & Isolation
-
-- **Correct Answer Secrecy:** Public queries utilize the view `v_client_questions` which strips `is_correct` and answer keys.
-- **Submission Idempotency:** The database enforces a `UNIQUE(question_id, participant_id)` constraint. Attempting to submit twice returns `{ already_submitted: true }` and does not mutate records.
-- **Admin Passkey Gate:** The administrator panel requires administrative authorization before destructive actions or state transitions can be initiated.
-
+| Capability | Student Role | Admin Role |
+|---|---|---|
+| Paper Access | Stripped Questions (`CLIENT_QUESTIONS`) | Full Bank + Rationales (`SERVER_QUESTION_BANK`) |
+| Answer Submission | Allowed during active question timer only | N/A |
+| Round 2 Eligibility | Gated by verified Round 1 score ($\ge 60\%$) | Organizer can adjust cutoff |
+| Audit Telemetry | View own finalized score & percentage | View question-by-question candidate log + fullscreen exits |
+| Competition Reset | Strictly Blocked | Protected by session token (`agt_...`) |

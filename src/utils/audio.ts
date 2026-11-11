@@ -96,6 +96,69 @@ class SoundSynthesizer {
   }
 
   /**
+   * Alias for submission success chime
+   */
+  public playSuccess() {
+    this.playSubmitSuccess();
+  }
+
+  /**
+   * Crisp, soft UI click/select sound
+   */
+  public playSelect() {
+    if (this.isMuted) return;
+    const ctx = this.getContext();
+    if (!ctx) return;
+
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(800, now);
+      osc.frequency.exponentialRampToValueAtTime(400, now + 0.04);
+
+      gain.gain.setValueAtTime(0.04, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start();
+      osc.stop(now + 0.04);
+    } catch {}
+  }
+
+  /**
+   * Gentle warning chime for modal / alerts
+   */
+  public playWarning() {
+    if (this.isMuted) return;
+    const ctx = this.getContext();
+    if (!ctx) return;
+
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(440, now);
+      osc.frequency.setValueAtTime(370, now + 0.09);
+
+      gain.gain.setValueAtTime(0.08, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start();
+      osc.stop(now + 0.2);
+    } catch {}
+  }
+
+  /**
    * Uplifting chime when round starts
    */
   public playRoundStart() {
