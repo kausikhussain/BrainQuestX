@@ -19,6 +19,7 @@
     "test:timer": "node scripts/test-per-question-timer.cjs",
     "test:fullscreen": "node scripts/test-fullscreen-telemetry.cjs",
     "test:concurrency": "node scripts/test-concurrency.cjs",
+    "test:sync": "node scripts/test-centralized-sync.cjs",
     "test:e2e": "node scripts/capture-all-states.cjs"
   },
   "dependencies": {

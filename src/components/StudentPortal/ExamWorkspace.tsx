@@ -40,6 +40,13 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
     return competitionService.startExamAttempt(participant.id, roundNumber);
   });
 
+  // Synchronize cloud attempt state on initialization
+  useEffect(() => {
+    competitionService.startExamAttemptAsync(participant.id, roundNumber).then((synced) => {
+      if (synced) setAttempt(synced);
+    }).catch(() => {});
+  }, [participant.id, roundNumber]);
+
   // 2. Load questions in student's assigned randomized sequence
   const roundQuestions: Question[] = useMemo(() => {
     return competitionService.getQuestionsForAttempt(participant.id, roundNumber);
@@ -48,6 +55,15 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(() => {
     return attempt.currentQuestionIndex || 0;
   });
+
+  // Periodic heartbeat reporting active student presence to administrator console
+  useEffect(() => {
+    competitionService.recordStudentHeartbeat(participant.id, roundNumber, currentQuestionIndex);
+    const interval = setInterval(() => {
+      competitionService.recordStudentHeartbeat(participant.id, roundNumber, currentQuestionIndex);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [participant.id, roundNumber, currentQuestionIndex]);
 
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved');
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
