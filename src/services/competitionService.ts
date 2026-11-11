@@ -1964,10 +1964,6 @@ class CompetitionService {
         console.warn('Supabase auth attempt error:', err?.message);
       }
     }
-      } catch (err: any) {
-        console.warn('Supabase auth attempt error:', err?.message);
-      }
-    }
 
     // 3. Authentication Failed
     attemptRecord.count += 1;

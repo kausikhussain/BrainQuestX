@@ -11,7 +11,9 @@ import {
   BookOpen, 
   Award,
   GraduationCap,
-  Key
+  Key,
+  Clock,
+  Lock
 } from 'lucide-react';
 import { competitionService } from '../../services/competitionService';
 import { StudentClass } from '../../types';
@@ -372,11 +374,9 @@ export const RegistrationView: React.FC<RegistrationViewProps> = ({
                   <span>Session encrypted locally &bull; Zero external trackers</span>
                 </p>
               </div>
-            </form>
           </div>
         </div>
 
       </div>
-    </div>
   );
 };
