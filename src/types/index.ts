@@ -4,7 +4,8 @@ export type CompetitionStatus =
   | 'registration_closed' 
   | 'in_progress' 
   | 'completed' 
-  | 'results_published';
+  | 'results_published'
+  | 'paused';
 
 export type StudentClass = '11th' | '12th';
 
@@ -39,6 +40,12 @@ export interface CompetitionState {
   duration_per_question: number;
   auto_advance: boolean;
   server_time?: number;
+  time_remaining_seconds?: number;
+  paused_at?: string | null;
+  remaining_time_when_paused?: number | null;
+  round_started_at?: string | null;
+  round_ended_at?: string | null;
+  state_version?: number;
   // Qualification configuration
   round_1_qualifying_score?: number; // default: 60 (out of 100)
 }

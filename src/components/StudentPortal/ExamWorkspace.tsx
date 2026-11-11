@@ -19,7 +19,7 @@ import {
   Lock,
   Sparkles
 } from 'lucide-react';
-import { Participant, Question, StudentExamAttempt, QuestionNavStatus, ExamReviewSummary, QuestionTimerState } from '../../types';
+import { Participant, Question, StudentExamAttempt, QuestionNavStatus, ExamReviewSummary, QuestionTimerState, CompetitionState } from '../../types';
 import { competitionService } from '../../services/competitionService';
 import { sound } from '../../utils/audio';
 import { SubmissionModal } from './SubmissionModal';
@@ -27,12 +27,14 @@ import { SubmissionModal } from './SubmissionModal';
 interface ExamWorkspaceProps {
   participant: Participant;
   roundNumber?: 1 | 2;
+  competitionState?: CompetitionState;
   onFinishExam: (attempt: StudentExamAttempt) => void;
 }
 
 export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
   participant,
   roundNumber = 1,
+  competitionState,
   onFinishExam,
 }) => {
   // 1. Initialize or restore authoritative attempt from competition service
@@ -46,6 +48,19 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
       if (synced) setAttempt(synced);
     }).catch(() => {});
   }, [participant.id, roundNumber]);
+
+  const [liveCompetitionState, setLiveCompetitionState] = useState<CompetitionState>(() => {
+    return competitionState || competitionService.getCompetitionState();
+  });
+
+  useEffect(() => {
+    const unsub = competitionService.subscribeToState((st) => {
+      setLiveCompetitionState(st);
+    });
+    return () => unsub();
+  }, []);
+
+  const isPaused = liveCompetitionState.status === 'paused';
 
   // 2. Load questions in student's assigned randomized sequence
   const roundQuestions: Question[] = useMemo(() => {
@@ -89,16 +104,6 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
     return Math.max(0, Math.ceil((timer.deadlineTime - now) / 1000));
   });
 
-  // Re-synchronize timer whenever active question changes
-  useEffect(() => {
-    const timer = competitionService.startQuestionTimer(participant.id, roundNumber, currentQuestionIndex);
-    setQuestionTimer(timer);
-    if (timer) {
-      const now = competitionService.getEstimatedServerTime();
-      setSecondsRemaining(Math.max(0, Math.ceil((timer.deadlineTime - now) / 1000)));
-    }
-  }, [currentQuestionIndex, participant.id, roundNumber]);
-
   // Execute authoritative submission
   const executeSubmission = useCallback(async () => {
     if (isSubmitting) return;
@@ -112,6 +117,33 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
       setIsSubmitting(false);
     }
   }, [isSubmitting, participant.id, roundNumber, onFinishExam]);
+
+  // Track pause transitions to seamlessly restore remaining time when unpaused
+  const wasPausedRef = React.useRef(isPaused);
+  useEffect(() => {
+    if (wasPausedRef.current && !isPaused && questionTimer) {
+      const now = competitionService.getEstimatedServerTime();
+      questionTimer.deadlineTime = now + secondsRemaining * 1000;
+    }
+    wasPausedRef.current = isPaused;
+  }, [isPaused, questionTimer, secondsRemaining]);
+
+  // Auto-submit if competition completed or results published
+  useEffect(() => {
+    if (liveCompetitionState.status === 'completed' || liveCompetitionState.status === 'results_published') {
+      executeSubmission();
+    }
+  }, [liveCompetitionState.status, executeSubmission]);
+
+  // Re-synchronize timer whenever active question changes
+  useEffect(() => {
+    const timer = competitionService.startQuestionTimer(participant.id, roundNumber, currentQuestionIndex);
+    setQuestionTimer(timer);
+    if (timer) {
+      const now = competitionService.getEstimatedServerTime();
+      setSecondsRemaining(Math.max(0, Math.ceil((timer.deadlineTime - now) / 1000)));
+    }
+  }, [currentQuestionIndex, participant.id, roundNumber]);
 
   // Automatic question advancement when 20s expires or student confirms
   const handleAutoAdvance = useCallback(async () => {
@@ -143,6 +175,11 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
     let expiredTriggered = false;
 
     const tick = () => {
+      if (isPaused) {
+        animId = requestAnimationFrame(tick);
+        return;
+      }
+
       const now = competitionService.getEstimatedServerTime();
       const diffMs = questionTimer.deadlineTime - now;
 
@@ -166,7 +203,7 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
     return () => {
       if (animId) cancelAnimationFrame(animId);
     };
-  }, [questionTimer, isSubmitting, handleAutoAdvance]);
+  }, [questionTimer, isSubmitting, isPaused, handleAutoAdvance]);
 
   // Full-screen monitoring (Non-blocking: student is never locked out during exam)
   useEffect(() => {
@@ -201,7 +238,7 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
 
   // Answer selection handler
   const handleSelectOption = (optionId: string) => {
-    if (!currentQuestionId || isSubmitting) return;
+    if (!currentQuestionId || isSubmitting || isPaused) return;
 
     setSaveStatus('saving');
     sound.playSelect();
@@ -233,7 +270,7 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
 
   // Clear answer handler
   const handleClearResponse = () => {
-    if (!currentQuestionId || isSubmitting) return;
+    if (!currentQuestionId || isSubmitting || isPaused) return;
 
     setSaveStatus('saving');
     competitionService.clearQuestionAnswer(participant.id, roundNumber, currentQuestionId);
@@ -254,7 +291,7 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
 
   // Toggle mark for review handler
   const handleToggleMarkForReview = () => {
-    if (!currentQuestionId || isSubmitting) return;
+    if (!currentQuestionId || isSubmitting || isPaused) return;
 
     competitionService.toggleMarkForReview(participant.id, roundNumber, currentQuestionId);
 
@@ -446,6 +483,26 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
         </div>
       </div>
 
+      {/* Paused Alert Banner */}
+      {isPaused && (
+        <div className="mb-6 p-4 rounded-2xl bg-amber-50 border border-amber-300 text-amber-900 flex items-center justify-between shadow-soft">
+          <div className="flex items-center gap-3">
+            <span className="w-3 h-3 rounded-full bg-amber-500 animate-ping" />
+            <div>
+              <p className="font-extrabold text-xs sm:text-sm text-amber-900">
+                Examination Temporarily Paused by Organizer
+              </p>
+              <p className="text-[11px] text-amber-700 mt-0.5">
+                Your question countdown is frozen at {secondsRemaining}s. Option selection is paused. The exam will resume automatically when unpaused by the organizer.
+              </p>
+            </div>
+          </div>
+          <span className="px-3 py-1 bg-amber-500 text-white font-mono text-[10px] font-black uppercase tracking-wider rounded-lg shadow-sm">
+            PAUSED
+          </span>
+        </div>
+      )}
+
       {/* ==================== MAIN WORKSPACE GRID ==================== */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 items-start">
         
@@ -506,10 +563,13 @@ export const ExamWorkspace: React.FC<ExamWorkspaceProps> = ({
                     <button
                       key={opt.id}
                       onClick={() => handleSelectOption(opt.id)}
-                      className={`w-full text-left p-4 rounded-xl border transition-all flex items-center justify-between gap-4 cursor-pointer group ${
-                        isSelected 
-                          ? 'bg-[#E9EDFF] border-[#465FE5] ring-2 ring-[#465FE5]/20 shadow-soft-sm' 
-                          : 'bg-white border-[#E7EAF0] hover:border-[#C5D0FF] hover:bg-[#F8F9FC]'
+                      disabled={isPaused}
+                      className={`w-full text-left p-4 rounded-xl border transition-all flex items-center justify-between gap-4 group ${
+                        isPaused
+                          ? 'opacity-60 cursor-not-allowed bg-slate-50 border-slate-200'
+                          : isSelected 
+                            ? 'bg-[#E9EDFF] border-[#465FE5] ring-2 ring-[#465FE5]/20 shadow-soft-sm cursor-pointer' 
+                            : 'bg-white border-[#E7EAF0] hover:border-[#C5D0FF] hover:bg-[#F8F9FC] cursor-pointer'
                       }`}
                     >
                       <div className="flex items-center gap-3.5">

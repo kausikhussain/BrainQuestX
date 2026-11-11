@@ -174,6 +174,7 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({
         <ExamWorkspace
           participant={activeStudent}
           roundNumber={activeRound}
+          competitionState={competitionState}
           onFinishExam={handleFinishExam}
         />
       );

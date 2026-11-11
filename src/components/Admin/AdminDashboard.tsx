@@ -675,7 +675,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <span className="w-2 h-2 rounded-full bg-[#16845B] animate-pulse" />
                     LIVE: IN PROGRESS
                   </span>
-                ) : competitionState.status === 'registration_closed' && competitionState.current_round_number === 1 ? (
+                ) : (competitionState.status === 'paused' || (competitionState.status === 'registration_closed' && competitionState.current_round_number === 1)) ? (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFFBEB] text-[#B7791F] border border-[#FDE68A] text-xs font-bold font-mono">
                     <span className="w-2 h-2 rounded-full bg-[#B7791F]" />
                     PAUSED
@@ -706,7 +706,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <span className="text-xs font-extrabold text-[#172033] mt-0.5 block truncate">
                   {competitionState.status === 'in_progress' && competitionState.current_round_number === 1
                     ? 'In Progress'
-                    : competitionState.status === 'registration_closed' && competitionState.current_round_number === 1
+                    : (competitionState.status === 'paused' || (competitionState.status === 'registration_closed' && competitionState.current_round_number === 1))
                     ? 'Paused'
                     : (competitionState.current_round_number === 2 || competitionState.status === 'completed' || competitionState.status === 'results_published')
                     ? 'Concluded'
@@ -755,7 +755,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </button>
               )}
 
-              {competitionState.status === 'registration_closed' && competitionState.current_round_number === 1 && (
+              {(competitionState.status === 'paused' || (competitionState.status === 'registration_closed' && competitionState.current_round_number === 1)) && (
                 <button
                   onClick={handleResumeRound}
                   disabled={isRoundActionLoading}
@@ -767,7 +767,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
 
               {/* End Round 1 Button */}
-              {(competitionState.current_round_number === 1 && (competitionState.status === 'in_progress' || competitionState.status === 'registration_closed')) && (
+              {(competitionState.current_round_number === 1 && (competitionState.status === 'in_progress' || competitionState.status === 'paused' || competitionState.status === 'registration_closed')) && (
                 <button
                   onClick={() => handleEndRound(1)}
                   disabled={isRoundActionLoading}
@@ -820,7 +820,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <span className="w-2 h-2 rounded-full bg-[#16845B] animate-pulse" />
                     LIVE: IN PROGRESS
                   </span>
-                ) : competitionState.status === 'registration_closed' && competitionState.current_round_number === 2 ? (
+                ) : (competitionState.status === 'paused' || (competitionState.status === 'registration_closed' && competitionState.current_round_number === 2)) ? (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFFBEB] text-[#B7791F] border border-[#FDE68A] text-xs font-bold font-mono">
                     <span className="w-2 h-2 rounded-full bg-[#B7791F]" />
                     PAUSED
@@ -861,7 +861,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <span className="text-xs font-extrabold text-[#172033] mt-0.5 block truncate">
                       {competitionState.status === 'in_progress' && competitionState.current_round_number === 2
                         ? 'In Progress'
-                        : competitionState.status === 'registration_closed' && competitionState.current_round_number === 2
+                        : (competitionState.status === 'paused' || (competitionState.status === 'registration_closed' && competitionState.current_round_number === 2))
                         ? 'Paused'
                         : (competitionState.status === 'completed' || competitionState.status === 'results_published')
                         ? 'Completed'
@@ -910,7 +910,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </button>
                   )}
 
-                  {competitionState.status === 'registration_closed' && competitionState.current_round_number === 2 && (
+                  {(competitionState.status === 'paused' || (competitionState.status === 'registration_closed' && competitionState.current_round_number === 2)) && (
                     <button
                       onClick={handleResumeRound}
                       disabled={isRoundActionLoading}
@@ -922,7 +922,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   )}
 
                   {/* End Round 2 Button */}
-                  {(competitionState.current_round_number === 2 && (competitionState.status === 'in_progress' || competitionState.status === 'registration_closed')) && (
+                  {(competitionState.current_round_number === 2 && (competitionState.status === 'in_progress' || competitionState.status === 'paused' || competitionState.status === 'registration_closed')) && (
                     <button
                       onClick={() => handleEndRound(2)}
                       disabled={isRoundActionLoading}

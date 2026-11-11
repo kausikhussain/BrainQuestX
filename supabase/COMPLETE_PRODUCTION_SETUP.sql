@@ -33,12 +33,17 @@ CREATE TABLE IF NOT EXISTS public.competitions (
     code TEXT NOT NULL UNIQUE DEFAULT 'QUIZ-2026',
     title TEXT NOT NULL,
     description TEXT,
-    status TEXT NOT NULL DEFAULT 'registration_open' CHECK (status IN ('upcoming', 'registration_open', 'registration_closed', 'in_progress', 'completed', 'results_published')),
+    status TEXT NOT NULL DEFAULT 'registration_open' CHECK (status IN ('upcoming', 'registration_open', 'registration_closed', 'in_progress', 'completed', 'results_published', 'paused')),
     current_round_number INT DEFAULT 1,
     current_question_id TEXT,
     current_question_number INT DEFAULT 0,
     question_start_time TIMESTAMPTZ,
     question_deadline TIMESTAMPTZ,
+    paused_at TIMESTAMPTZ,
+    remaining_time_when_paused INT,
+    round_started_at TIMESTAMPTZ,
+    round_ended_at TIMESTAMPTZ,
+    state_version INT NOT NULL DEFAULT 1,
     duration_per_question INT NOT NULL DEFAULT 20,
     auto_advance BOOLEAN NOT NULL DEFAULT true,
     round_1_qualifying_score INT NOT NULL DEFAULT 60,
@@ -47,6 +52,11 @@ CREATE TABLE IF NOT EXISTS public.competitions (
 );
 
 ALTER TABLE public.competitions ADD COLUMN IF NOT EXISTS round_1_qualifying_score INT NOT NULL DEFAULT 60;
+ALTER TABLE public.competitions ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ;
+ALTER TABLE public.competitions ADD COLUMN IF NOT EXISTS remaining_time_when_paused INT;
+ALTER TABLE public.competitions ADD COLUMN IF NOT EXISTS round_started_at TIMESTAMPTZ;
+ALTER TABLE public.competitions ADD COLUMN IF NOT EXISTS round_ended_at TIMESTAMPTZ;
+ALTER TABLE public.competitions ADD COLUMN IF NOT EXISTS state_version INT NOT NULL DEFAULT 1;
 
 -- Rounds Table
 CREATE TABLE IF NOT EXISTS public.rounds (
@@ -180,6 +190,23 @@ CREATE TABLE IF NOT EXISTS public.admin_users (
 );
 
 CREATE INDEX IF NOT EXISTS idx_admin_users_token ON public.admin_users(session_token);
+
+-- Admin Sessions Table (Supports Concurrent Multi-Device Admin Logins)
+CREATE TABLE IF NOT EXISTS public.admin_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES public.admin_users(id) ON DELETE CASCADE,
+    session_token TEXT NOT NULL UNIQUE,
+    token_expires_at TIMESTAMPTZ NOT NULL,
+    ip_hint TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_sessions_token ON public.admin_sessions(session_token);
+CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires ON public.admin_sessions(token_expires_at);
+
+ALTER TABLE public.admin_sessions ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.admin_sessions FROM anon, public;
+GRANT ALL ON TABLE public.admin_sessions TO service_role;
 
 -- Client-Safe View (Excludes is_correct answer flag)
 CREATE OR REPLACE VIEW public.v_client_questions AS
@@ -1132,8 +1159,8 @@ BEGIN
 END;
 $$;
 
--- Unified Deterministic Leaderboard
-CREATE OR REPLACE FUNCTION public.get_leaderboard(p_competition_id UUID)
+-- Unified Deterministic Leaderboard (Supports Explicit or Canonical Active Competition)
+CREATE OR REPLACE FUNCTION public.get_leaderboard(p_competition_id UUID DEFAULT NULL)
 RETURNS TABLE (
     rank BIGINT,
     participant_id UUID,
@@ -1154,51 +1181,61 @@ RETURNS TABLE (
     is_qualified BOOLEAN,
     qualified_for_round_2 BOOLEAN
 )
-LANGUAGE sql
-STABLE
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, extensions, pg_temp
 AS $$
+DECLARE
+    v_cid UUID := p_competition_id;
+BEGIN
+    IF v_cid IS NULL THEN
+        SELECT id INTO v_cid FROM public.competitions ORDER BY created_at ASC LIMIT 1;
+    END IF;
+
+    RETURN QUERY
     WITH participant_scores AS (
         SELECT 
-            p.id AS participant_id,
-            p.student_name,
-            p.school_name,
-            p.student_class,
-            COALESCE(SUM(CASE WHEN s.round_number = 1 THEN s.points_awarded ELSE 0 END), 0) AS round_1_score,
-            COALESCE(SUM(CASE WHEN s.round_number = 2 THEN s.points_awarded ELSE 0 END), 0) AS round_2_score,
-            COALESCE(SUM(s.points_awarded), 0) AS total_score,
-            COALESCE(SUM(CASE WHEN s.is_correct THEN s.latency_ms ELSE 0 END), 0) AS total_time_ms,
-            COALESCE(COUNT(CASE WHEN s.is_correct THEN 1 END), 0) AS correct_count
+            p.id AS p_id,
+            p.student_name AS p_name,
+            p.school_name AS p_school,
+            p.student_class::TEXT AS p_class,
+            COALESCE(SUM(CASE WHEN s.round_number = 1 THEN s.points_awarded ELSE 0 END), 0) AS r1_score,
+            COALESCE(SUM(CASE WHEN s.round_number = 2 THEN s.points_awarded ELSE 0 END), 0) AS r2_score,
+            COALESCE(SUM(s.points_awarded), 0) AS t_score,
+            COALESCE(SUM(CASE WHEN s.is_correct THEN s.latency_ms ELSE 0 END), 0) AS t_time,
+            COALESCE(COUNT(CASE WHEN s.is_correct THEN 1 END), 0) AS c_count
         FROM public.participants p
         LEFT JOIN public.submissions s ON p.id = s.participant_id
-        WHERE p.competition_id = p_competition_id
+        WHERE p.competition_id = v_cid OR v_cid IS NULL
         GROUP BY p.id, p.student_name, p.school_name, p.student_class
     )
     SELECT 
         DENSE_RANK() OVER (
             ORDER BY 
-                total_score DESC,
-                round_2_score DESC,
-                total_time_ms ASC
+                ps.t_score DESC,
+                ps.r2_score DESC,
+                ps.t_time ASC
         ) AS rank,
-        participant_id,
-        student_name,
-        school_name,
-        student_class,
-        round_1_score,
+        ps.p_id AS participant_id,
+        ps.p_name AS student_name,
+        ps.p_school AS school_name,
+        ps.p_class AS student_class,
+        ps.r1_score AS round_1_score,
         100::BIGINT AS round_1_max_marks,
-        ROUND((round_1_score::NUMERIC / 100.0) * 100.0, 1) AS round_1_pct,
-        round_2_score,
+        ROUND((ps.r1_score::NUMERIC / 100.0) * 100.0, 1) AS round_1_pct,
+        ps.r2_score AS round_2_score,
         100::BIGINT AS round_2_max_marks,
-        ROUND((round_2_score::NUMERIC / 100.0) * 100.0, 1) AS round_2_pct,
-        total_score,
+        ROUND((ps.r2_score::NUMERIC / 100.0) * 100.0, 1) AS round_2_pct,
+        ps.t_score AS total_score,
         200::BIGINT AS total_max_marks,
-        ROUND((total_score::NUMERIC / 200.0) * 100.0, 1) AS total_pct,
-        total_time_ms,
-        correct_count,
-        (round_1_score >= 60) AS is_qualified,
-        (round_1_score >= 60) AS qualified_for_round_2
-    FROM participant_scores
-    ORDER BY rank ASC, student_name ASC;
+        ROUND((ps.t_score::NUMERIC / 200.0) * 100.0, 1) AS total_pct,
+        ps.t_time AS total_time_ms,
+        ps.c_count AS correct_count,
+        (ps.r1_score >= 60) AS is_qualified,
+        (ps.r1_score >= 60) AS qualified_for_round_2
+    FROM participant_scores ps
+    ORDER BY rank ASC, ps.p_name ASC;
+END;
 $$;
 
 -- Admin RBAC Verifier
@@ -1228,7 +1265,7 @@ BEGIN
 END;
 $$;
 
--- Server-Side Administrator Login RPC (Cryptographic Bcrypt Verification)
+-- Server-Side Administrator Login RPC (Cryptographic Bcrypt Verification & Multi-Session)
 CREATE OR REPLACE FUNCTION public.admin_login_rpc(
     p_username TEXT,
     p_password TEXT
@@ -1263,6 +1300,11 @@ BEGIN
     v_token := encode(extensions.gen_random_bytes(32), 'hex');
     v_expires := clock_timestamp() + INTERVAL '12 hours';
 
+    -- Insert into admin_sessions: Allows multiple concurrent admin laptops without token collision
+    INSERT INTO public.admin_sessions (user_id, session_token, token_expires_at)
+    VALUES (v_admin.id, v_token, v_expires);
+
+    -- Maintain admin_users backward compatibility
     UPDATE public.admin_users
     SET 
         session_token = v_token,
@@ -1280,7 +1322,7 @@ BEGIN
 END;
 $$;
 
--- Server-Side Administrator Session Verification RPC
+-- Server-Side Administrator Session Verification RPC (Multi-Token Compatible)
 CREATE OR REPLACE FUNCTION public.verify_admin_session_rpc(
     p_token TEXT
 )
@@ -1296,7 +1338,22 @@ BEGIN
         RETURN jsonb_build_object('is_admin', false, 'error', 'Missing session token.');
     END IF;
 
-    SELECT * INTO v_admin FROM public.admin_users 
+    -- 1. Check admin_sessions table
+    SELECT u.username, u.role INTO v_admin
+    FROM public.admin_sessions s
+    JOIN public.admin_users u ON u.id = s.user_id
+    WHERE s.session_token = trim(p_token) AND s.token_expires_at > clock_timestamp();
+
+    IF FOUND THEN
+        RETURN jsonb_build_object(
+            'is_admin', true,
+            'username', v_admin.username,
+            'role', v_admin.role
+        );
+    END IF;
+
+    -- 2. Fallback check admin_users table
+    SELECT username, role INTO v_admin FROM public.admin_users 
     WHERE session_token = trim(p_token) AND token_expires_at > clock_timestamp();
 
     IF FOUND THEN
@@ -1307,7 +1364,7 @@ BEGIN
         );
     END IF;
 
-    -- Fallback: Supabase Auth check on admin_roles table
+    -- 3. Fallback: Supabase Auth check on admin_roles table
     IF auth.uid() IS NOT NULL AND EXISTS (SELECT 1 FROM public.admin_roles WHERE user_id = auth.uid()) THEN
         RETURN jsonb_build_object('is_admin', true, 'username', 'admin', 'role', 'SUPERADMIN');
     END IF;
@@ -1316,7 +1373,7 @@ BEGIN
 END;
 $$;
 
--- Server-Side Administrator Logout RPC
+-- Server-Side Administrator Logout RPC (Removes only this device's session)
 CREATE OR REPLACE FUNCTION public.admin_logout_rpc(
     p_token TEXT
 )
@@ -1326,9 +1383,8 @@ SECURITY DEFINER
 SET search_path = public, auth, extensions, pg_temp
 AS $$
 BEGIN
-    UPDATE public.admin_users
-    SET session_token = NULL, token_expires_at = NULL
-    WHERE session_token = trim(p_token);
+    DELETE FROM public.admin_sessions WHERE session_token = trim(p_token);
+    UPDATE public.admin_users SET session_token = NULL WHERE session_token = trim(p_token);
 
     RETURN jsonb_build_object('success', true);
 END;
@@ -1349,10 +1405,23 @@ AS $$
 DECLARE
     v_comp RECORD;
     v_is_authorized BOOLEAN := false;
+    v_first_q_id TEXT;
+    v_duration INT;
+    v_now TIMESTAMPTZ := clock_timestamp();
+    v_start_time TIMESTAMPTZ;
+    v_deadline TIMESTAMPTZ;
+    v_paused_at TIMESTAMPTZ;
+    v_remaining INT;
+    v_round_ended_at TIMESTAMPTZ;
+    v_round_started_at TIMESTAMPTZ;
+    v_q_number INT;
+    v_q_id TEXT;
 BEGIN
-    -- Check admin token authorization
+    -- Check admin token authorization across all active sessions
     IF p_admin_token IS NOT NULL AND trim(p_admin_token) <> '' THEN
-        IF EXISTS (SELECT 1 FROM public.admin_users WHERE session_token = trim(p_admin_token) AND token_expires_at > clock_timestamp()) THEN
+        IF EXISTS (SELECT 1 FROM public.admin_sessions WHERE session_token = trim(p_admin_token) AND token_expires_at > v_now) THEN
+            v_is_authorized := true;
+        ELSIF EXISTS (SELECT 1 FROM public.admin_users WHERE session_token = trim(p_admin_token) AND token_expires_at > v_now) THEN
             v_is_authorized := true;
         END IF;
     END IF;
@@ -1373,20 +1442,94 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'error', 'Competition not found');
     END IF;
 
+    v_duration := COALESCE(v_comp.duration_per_question, 20);
+
+    -- Establish question transitions based on status
+    IF p_status = 'in_progress' THEN
+        IF v_comp.status = 'paused' AND v_comp.remaining_time_when_paused IS NOT NULL THEN
+            v_start_time := v_now;
+            v_deadline := v_now + (GREATEST(1, v_comp.remaining_time_when_paused) || ' seconds')::INTERVAL;
+            v_paused_at := NULL;
+            v_remaining := NULL;
+            v_round_started_at := v_comp.round_started_at;
+            v_q_number := COALESCE(v_comp.current_question_number, 1);
+            v_q_id := v_comp.current_question_id;
+        ELSE
+            SELECT id INTO v_first_q_id FROM public.questions 
+            WHERE round_number = p_round_number 
+            ORDER BY question_number ASC LIMIT 1;
+
+            v_start_time := v_now;
+            v_deadline := v_now + (v_duration || ' seconds')::INTERVAL;
+            v_paused_at := NULL;
+            v_remaining := NULL;
+            v_round_started_at := v_now;
+            v_q_number := 1;
+            v_q_id := v_first_q_id;
+        END IF;
+        v_round_ended_at := NULL;
+
+    ELSIF p_status = 'paused' THEN
+        v_paused_at := v_now;
+        v_remaining := GREATEST(0, EXTRACT(EPOCH FROM (v_comp.question_deadline - v_now))::INT);
+        v_start_time := v_comp.question_start_time;
+        v_deadline := v_comp.question_deadline;
+        v_round_started_at := v_comp.round_started_at;
+        v_round_ended_at := NULL;
+        v_q_number := v_comp.current_question_number;
+        v_q_id := v_comp.current_question_id;
+
+    ELSIF p_status IN ('completed', 'registration_closed', 'results_published') THEN
+        v_round_ended_at := v_now;
+        v_start_time := NULL;
+        v_deadline := NULL;
+        v_paused_at := NULL;
+        v_remaining := NULL;
+        v_round_started_at := v_comp.round_started_at;
+        v_q_number := v_comp.current_question_number;
+        v_q_id := NULL;
+    ELSE
+        v_start_time := NULL;
+        v_deadline := NULL;
+        v_paused_at := NULL;
+        v_remaining := NULL;
+        v_round_started_at := NULL;
+        v_round_ended_at := NULL;
+        v_q_number := 0;
+        v_q_id := NULL;
+    END IF;
+
     UPDATE public.competitions
     SET 
-        status = COALESCE(p_status, status),
+        status = p_status,
         current_round_number = COALESCE(p_round_number, current_round_number),
         round_1_qualifying_score = COALESCE(p_cutoff, round_1_qualifying_score),
-        updated_at = clock_timestamp()
+        current_question_id = v_q_id,
+        current_question_number = v_q_number,
+        question_start_time = v_start_time,
+        question_deadline = v_deadline,
+        paused_at = v_paused_at,
+        remaining_time_when_paused = v_remaining,
+        round_started_at = v_round_started_at,
+        round_ended_at = v_round_ended_at,
+        state_version = COALESCE(v_comp.state_version, 0) + 1,
+        updated_at = v_now
     WHERE id = v_comp.id
     RETURNING * INTO v_comp;
 
     RETURN jsonb_build_object(
         'success', true,
+        'id', v_comp.id,
+        'code', v_comp.code,
         'status', v_comp.status,
         'current_round_number', v_comp.current_round_number,
-        'round_1_qualifying_score', v_comp.round_1_qualifying_score
+        'current_question_id', v_comp.current_question_id,
+        'current_question_number', v_comp.current_question_number,
+        'question_start_time', v_comp.question_start_time,
+        'question_deadline', v_comp.question_deadline,
+        'round_1_qualifying_score', v_comp.round_1_qualifying_score,
+        'state_version', v_comp.state_version,
+        'server_time', (EXTRACT(EPOCH FROM v_now) * 1000)::BIGINT
     );
 END;
 $$;
@@ -1400,10 +1543,18 @@ SET search_path = public, auth, extensions, pg_temp
 AS $$
 DECLARE
     v_comp RECORD;
+    v_now TIMESTAMPTZ := clock_timestamp();
+    v_remaining INT := 0;
 BEGIN
     SELECT * INTO v_comp FROM public.competitions ORDER BY created_at ASC LIMIT 1;
     IF NOT FOUND THEN
         RETURN jsonb_build_object('success', false, 'error', 'Competition not found');
+    END IF;
+
+    IF v_comp.status = 'in_progress' AND v_comp.question_deadline IS NOT NULL THEN
+        v_remaining := GREATEST(0, EXTRACT(EPOCH FROM (v_comp.question_deadline - v_now))::INT);
+    ELSIF v_comp.status = 'paused' AND v_comp.remaining_time_when_paused IS NOT NULL THEN
+        v_remaining := v_comp.remaining_time_when_paused;
     END IF;
 
     RETURN jsonb_build_object(
@@ -1411,12 +1562,19 @@ BEGIN
         'id', v_comp.id,
         'code', v_comp.code,
         'title', v_comp.title,
+        'description', v_comp.description,
         'status', v_comp.status,
         'current_round_number', v_comp.current_round_number,
+        'current_question_id', v_comp.current_question_id,
+        'current_question_number', v_comp.current_question_number,
+        'question_start_time', v_comp.question_start_time,
+        'question_deadline', v_comp.question_deadline,
         'duration_per_question', v_comp.duration_per_question,
         'auto_advance', v_comp.auto_advance,
         'round_1_qualifying_score', COALESCE(v_comp.round_1_qualifying_score, 60),
-        'server_time', (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT
+        'state_version', COALESCE(v_comp.state_version, 1),
+        'time_remaining_seconds', v_remaining,
+        'server_time', (EXTRACT(EPOCH FROM v_now) * 1000)::BIGINT
     );
 END;
 $$;
@@ -1438,9 +1596,11 @@ DECLARE
     v_result JSONB;
     v_is_authorized BOOLEAN := false;
 BEGIN
-    -- Check admin token authorization
+    -- Check admin token authorization across all active sessions
     IF p_admin_token IS NOT NULL AND trim(p_admin_token) <> '' THEN
-        IF EXISTS (SELECT 1 FROM public.admin_users WHERE session_token = trim(p_admin_token) AND token_expires_at > clock_timestamp()) THEN
+        IF EXISTS (SELECT 1 FROM public.admin_sessions WHERE session_token = trim(p_admin_token) AND token_expires_at > clock_timestamp()) THEN
+            v_is_authorized := true;
+        ELSIF EXISTS (SELECT 1 FROM public.admin_users WHERE session_token = trim(p_admin_token) AND token_expires_at > clock_timestamp()) THEN
             v_is_authorized := true;
         END IF;
     END IF;
@@ -1507,9 +1667,11 @@ DECLARE
     v_new_code TEXT;
     v_new_token TEXT;
 BEGIN
-    -- Check admin token authorization
+    -- Check admin token authorization across all active sessions
     IF p_admin_token IS NOT NULL AND trim(p_admin_token) <> '' THEN
-        IF EXISTS (SELECT 1 FROM public.admin_users WHERE session_token = trim(p_admin_token) AND token_expires_at > clock_timestamp()) THEN
+        IF EXISTS (SELECT 1 FROM public.admin_sessions WHERE session_token = trim(p_admin_token) AND token_expires_at > clock_timestamp()) THEN
+            v_is_authorized := true;
+        ELSIF EXISTS (SELECT 1 FROM public.admin_users WHERE session_token = trim(p_admin_token) AND token_expires_at > clock_timestamp()) THEN
             v_is_authorized := true;
         END IF;
     END IF;

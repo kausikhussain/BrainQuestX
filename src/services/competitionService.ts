@@ -159,6 +159,19 @@ class CompetitionService {
       const { data, error } = await supabase.rpc('get_competition_state_rpc');
       if (!error && data && data.success) {
         let changed = false;
+
+        if (typeof data.server_time === 'number') {
+          this.clockOffsetMs = data.server_time - Date.now();
+        }
+
+        if (data.id && this.localState.id !== data.id) {
+          this.localState.id = data.id;
+          changed = true;
+        }
+        if (data.code && this.localState.code !== data.code) {
+          this.localState.code = data.code;
+          changed = true;
+        }
         if (this.localState.status !== data.status) {
           this.localState.status = data.status;
           changed = true;
@@ -167,16 +180,47 @@ class CompetitionService {
           this.localState.current_round_number = data.current_round_number;
           changed = true;
         }
+        if (data.current_question_id !== undefined && this.localState.current_question_id !== data.current_question_id) {
+          this.localState.current_question_id = data.current_question_id;
+          changed = true;
+        }
+        if (data.current_question_number !== undefined && this.localState.current_question_number !== data.current_question_number) {
+          this.localState.current_question_number = data.current_question_number;
+          changed = true;
+        }
+        if (data.question_start_time !== undefined && this.localState.question_start_time !== data.question_start_time) {
+          this.localState.question_start_time = data.question_start_time;
+          changed = true;
+        }
+        if (data.question_deadline !== undefined && this.localState.question_deadline !== data.question_deadline) {
+          this.localState.question_deadline = data.question_deadline;
+          changed = true;
+        }
+        if (data.paused_at !== undefined && this.localState.paused_at !== data.paused_at) {
+          this.localState.paused_at = data.paused_at;
+          changed = true;
+        }
+        if (data.remaining_time_when_paused !== undefined && this.localState.remaining_time_when_paused !== data.remaining_time_when_paused) {
+          this.localState.remaining_time_when_paused = data.remaining_time_when_paused;
+          changed = true;
+        }
+        if (data.state_version !== undefined && this.localState.state_version !== data.state_version) {
+          this.localState.state_version = data.state_version;
+          changed = true;
+        }
         if (data.round_1_qualifying_score && this.localState.round_1_qualifying_score !== data.round_1_qualifying_score) {
           this.localState.round_1_qualifying_score = data.round_1_qualifying_score;
           changed = true;
         }
-        if (data.duration_per_question) {
+        if (data.duration_per_question && this.localState.duration_per_question !== data.duration_per_question) {
           this.localState.duration_per_question = data.duration_per_question;
+          changed = true;
         }
-        if (data.server_time) {
-          this.clockOffsetMs = data.server_time - Date.now();
+        if (data.time_remaining_seconds !== undefined && this.localState.time_remaining_seconds !== data.time_remaining_seconds) {
+          this.localState.time_remaining_seconds = data.time_remaining_seconds;
+          changed = true;
         }
+
         if (changed) {
           this.persistLocal();
           this.notifyListeners();
@@ -185,12 +229,48 @@ class CompetitionService {
         const { data: comp } = await supabase.from('competitions').select('*').limit(1).maybeSingle();
         if (comp) {
           let changed = false;
+          if (comp.id && this.localState.id !== comp.id) {
+            this.localState.id = comp.id;
+            changed = true;
+          }
+          if (comp.code && this.localState.code !== comp.code) {
+            this.localState.code = comp.code;
+            changed = true;
+          }
           if (this.localState.status !== comp.status) {
             this.localState.status = comp.status;
             changed = true;
           }
           if (this.localState.current_round_number !== comp.current_round_number) {
             this.localState.current_round_number = comp.current_round_number;
+            changed = true;
+          }
+          if (comp.question_start_time !== undefined && this.localState.question_start_time !== comp.question_start_time) {
+            this.localState.question_start_time = comp.question_start_time;
+            changed = true;
+          }
+          if (comp.question_deadline !== undefined && this.localState.question_deadline !== comp.question_deadline) {
+            this.localState.question_deadline = comp.question_deadline;
+            changed = true;
+          }
+          if (comp.current_question_id !== undefined && this.localState.current_question_id !== comp.current_question_id) {
+            this.localState.current_question_id = comp.current_question_id;
+            changed = true;
+          }
+          if (comp.current_question_number !== undefined && this.localState.current_question_number !== comp.current_question_number) {
+            this.localState.current_question_number = comp.current_question_number;
+            changed = true;
+          }
+          if (comp.paused_at !== undefined && this.localState.paused_at !== comp.paused_at) {
+            this.localState.paused_at = comp.paused_at;
+            changed = true;
+          }
+          if (comp.remaining_time_when_paused !== undefined && this.localState.remaining_time_when_paused !== comp.remaining_time_when_paused) {
+            this.localState.remaining_time_when_paused = comp.remaining_time_when_paused;
+            changed = true;
+          }
+          if (comp.state_version !== undefined && this.localState.state_version !== comp.state_version) {
+            this.localState.state_version = comp.state_version;
             changed = true;
           }
           if (changed) {
@@ -222,7 +302,7 @@ class CompetitionService {
         }
 
         const data = res.data;
-        if (!res.error && Array.isArray(data) && data.length > 0) {
+        if (!res.error && Array.isArray(data)) {
           this.participants = data.map((p: any) => ({
             id: p.id,
             competition_id: p.competition_id,
@@ -240,11 +320,12 @@ class CompetitionService {
           }));
           this.persistLocal();
           return this.participants;
-        } else if (!res.error && Array.isArray(data) && data.length === 0) {
-          return [...this.participants];
         } else {
-          const { data: partData } = await supabase.from('participants').select('*');
-          if (partData && partData.length > 0) {
+          if (res.error) {
+            console.warn('[CompetitionService] admin_get_participants RPC returned error:', res.error.message);
+          }
+          const { data: partData, error: selectErr } = await supabase.from('participants').select('*');
+          if (!selectErr && partData && Array.isArray(partData)) {
             this.participants = partData.map((p: any) => ({
               id: p.id,
               competition_id: p.competition_id,
@@ -422,6 +503,7 @@ class CompetitionService {
                 ...this.localState,
                 ...payload.new,
               };
+              this.persistLocal();
               this.notifyListeners();
             }
           }
@@ -1883,6 +1965,8 @@ class CompetitionService {
       current_question_number: 1,
       question_start_time: new Date(now).toISOString(),
       question_deadline: new Date(deadline).toISOString(),
+      paused_at: null,
+      remaining_time_when_paused: null,
     };
 
     this.persistLocal();
@@ -1898,9 +1982,30 @@ class CompetitionService {
           p_round_number: roundNumber,
           p_cutoff: this.localState.round_1_qualifying_score || 60,
           p_admin_token: token,
+          p_question_id: firstQ.id,
+          p_question_number: 1,
+          p_duration_seconds: durationSeconds,
         });
         if (error) {
           console.warn('[Admin Controls] admin_update_competition_state error:', error.message);
+        } else if (data && data.success) {
+          this.localState = {
+            ...this.localState,
+            status: data.status || 'in_progress',
+            current_round_number: data.current_round_number || roundNumber,
+            current_question_id: data.current_question_id || firstQ.id,
+            current_question_number: data.current_question_number || 1,
+            question_start_time: data.question_start_time || this.localState.question_start_time,
+            question_deadline: data.question_deadline || this.localState.question_deadline,
+            paused_at: data.paused_at,
+            remaining_time_when_paused: data.remaining_time_when_paused,
+            state_version: data.state_version ?? this.localState.state_version,
+          };
+          if (data.server_time) {
+            this.clockOffsetMs = data.server_time - Date.now();
+          }
+          this.persistLocal();
+          this.notifyListeners();
         }
       } catch (err) {
         console.warn('Error syncing startRound to Supabase:', err);
@@ -1911,10 +2016,20 @@ class CompetitionService {
   public async pauseRound(adminToken?: string) {
     this.clearAutoAdvance();
     const currentRound = this.localState.current_round_number || 1;
+    const now = Date.now();
+
+    let remaining = 20;
+    if (this.localState.question_deadline) {
+      const deadlineMs = new Date(this.localState.question_deadline).getTime();
+      const currentServerTime = this.getEstimatedServerTime();
+      remaining = Math.max(0, Math.round((deadlineMs - currentServerTime) / 1000));
+    }
 
     this.localState = {
       ...this.localState,
-      status: 'registration_closed',
+      status: 'paused',
+      paused_at: new Date(now).toISOString(),
+      remaining_time_when_paused: remaining,
     };
 
     this.persistLocal();
@@ -1924,12 +2039,23 @@ class CompetitionService {
     const token = adminToken || this.getActiveAdminToken();
     if (isSupabaseConfigured() && supabase) {
       try {
-        await supabase.rpc('admin_update_competition_state', {
-          p_status: 'registration_closed',
+        const { data, error } = await supabase.rpc('admin_update_competition_state', {
+          p_status: 'paused',
           p_round_number: currentRound,
           p_cutoff: this.localState.round_1_qualifying_score || 60,
           p_admin_token: token,
         });
+        if (!error && data && data.success) {
+          this.localState = {
+            ...this.localState,
+            status: 'paused',
+            paused_at: data.paused_at || this.localState.paused_at,
+            remaining_time_when_paused: data.remaining_time_when_paused ?? this.localState.remaining_time_when_paused,
+            state_version: data.state_version ?? this.localState.state_version,
+          };
+          this.persistLocal();
+          this.notifyListeners();
+        }
       } catch (err) {
         console.warn('Error syncing pauseRound to Supabase:', err);
       }
@@ -1938,13 +2064,15 @@ class CompetitionService {
 
   public async resumeRound(adminToken?: string) {
     const roundNumber = (this.localState.current_round_number as 1 | 2) || 1;
-    const durationSeconds = this.localState.duration_per_question || 20;
+    const durationSeconds = this.localState.remaining_time_when_paused || this.localState.duration_per_question || 20;
     const now = Date.now();
     const deadline = now + durationSeconds * 1000;
 
     this.localState = {
       ...this.localState,
       status: 'in_progress',
+      paused_at: null,
+      remaining_time_when_paused: null,
       question_start_time: new Date(now).toISOString(),
       question_deadline: new Date(deadline).toISOString(),
     };
@@ -1957,12 +2085,29 @@ class CompetitionService {
     const token = adminToken || this.getActiveAdminToken();
     if (isSupabaseConfigured() && supabase) {
       try {
-        await supabase.rpc('admin_update_competition_state', {
+        const { data, error } = await supabase.rpc('admin_update_competition_state', {
           p_status: 'in_progress',
           p_round_number: roundNumber,
           p_cutoff: this.localState.round_1_qualifying_score || 60,
           p_admin_token: token,
+          p_duration_seconds: durationSeconds,
         });
+        if (!error && data && data.success) {
+          this.localState = {
+            ...this.localState,
+            status: 'in_progress',
+            paused_at: null,
+            remaining_time_when_paused: null,
+            question_start_time: data.question_start_time || this.localState.question_start_time,
+            question_deadline: data.question_deadline || this.localState.question_deadline,
+            state_version: data.state_version ?? this.localState.state_version,
+          };
+          if (data.server_time) {
+            this.clockOffsetMs = data.server_time - Date.now();
+          }
+          this.persistLocal();
+          this.notifyListeners();
+        }
       } catch (err) {
         console.warn('Error syncing resumeRound to Supabase:', err);
       }
@@ -2038,6 +2183,8 @@ class CompetitionService {
       current_question_id: null,
       question_start_time: null,
       question_deadline: null,
+      paused_at: null,
+      remaining_time_when_paused: null,
     };
 
     this.persistLocal();

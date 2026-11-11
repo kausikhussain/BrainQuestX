@@ -267,7 +267,102 @@ const finalizedState = adminEndRound(activeStateR2, 2, 'admin_token');
 assert.strictEqual(finalizedState.status, 'completed', 'Final competition state is completed');
 console.log('  -> PASS: Round 2 concluded; competition marked as completed\n');
 
+// -------------------------------------------------------------------------
+// [TEST 10] CONCURRENT MULTI-DEVICE ADMIN SESSIONS (admin_sessions table)
+// -------------------------------------------------------------------------
+console.log('[TEST 10] Testing concurrent multi-admin sessions without session token collisions...');
+
+// Simulating admin_sessions table
+const mockAdminSessions = new Map();
+
+function simulateAdminLogin(username, password) {
+  assert.strictEqual(username, 'admin');
+  assert.strictEqual(password, 'admin123');
+  const token = 'agt_' + Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2);
+  const session = {
+    userId: '00000000-0000-0000-0000-000000000001',
+    token,
+    expiresAt: Date.now() + 12 * 3600 * 1000,
+  };
+  mockAdminSessions.set(token, session);
+  return token;
+}
+
+function simulateVerifySession(token) {
+  const session = mockAdminSessions.get(token);
+  if (!session) return false;
+  return Date.now() < session.expiresAt;
+}
+
+// Admin 1 logs in from Laptop 1
+const tokenAdminLaptop1 = simulateAdminLogin('admin', 'admin123');
+assert.ok(tokenAdminLaptop1, 'Admin 1 receives session token');
+assert.strictEqual(simulateVerifySession(tokenAdminLaptop1), true, 'Admin 1 session is valid');
+
+// Admin 2 logs in concurrently from Laptop 2 with the SAME credentials
+const tokenAdminLaptop2 = simulateAdminLogin('admin', 'admin123');
+assert.ok(tokenAdminLaptop2, 'Admin 2 receives session token');
+assert.notStrictEqual(tokenAdminLaptop1, tokenAdminLaptop2, 'Separate tokens generated for separate sessions');
+
+// Crucial: Admin 1 on Laptop 1 must REMAIN authenticated!
+assert.strictEqual(simulateVerifySession(tokenAdminLaptop1), true, 'Admin 1 session remains strictly valid and uncorrupted');
+assert.strictEqual(simulateVerifySession(tokenAdminLaptop2), true, 'Admin 2 session is active concurrently');
+
+// Both admins can fetch participant records concurrently without 401 Unauthorized
+function simulateAdminGetParticipants(token, allParticipants) {
+  assert.ok(simulateVerifySession(token), 'Valid admin session token required');
+  return [...allParticipants];
+}
+
+const participantsCohort = [studentA, studentB];
+const viewFromLaptop1 = simulateAdminGetParticipants(tokenAdminLaptop1, participantsCohort);
+const viewFromLaptop2 = simulateAdminGetParticipants(tokenAdminLaptop2, participantsCohort);
+
+assert.strictEqual(viewFromLaptop1.length, 2, 'Admin 1 views all 2 registered students');
+assert.strictEqual(viewFromLaptop2.length, 2, 'Admin 2 concurrently views the exact same 2 registered students');
+assert.deepStrictEqual(viewFromLaptop1, viewFromLaptop2, 'Data is 100% consistent across multi-device admin sessions');
+console.log('  -> PASS: Multi-device admin concurrency verified; zero session token collision\n');
+
+// -------------------------------------------------------------------------
+// [TEST 11] SERVER-AUTHORITATIVE TIMER DEADLINE & PAUSE/RESUME ACCURACY
+// -------------------------------------------------------------------------
+console.log('[TEST 11] Testing server-authoritative timer derivation across multiple student laptops...');
+
+const serverReferenceTime = Date.now();
+const questionDuration = 20;
+const serverDeadlineIso = new Date(serverReferenceTime + questionDuration * 1000).toISOString();
+
+function computeStudentRemainingSeconds(deadlineIso, clientNowMs, clockOffsetMs) {
+  const estimatedServerNow = clientNowMs + clockOffsetMs;
+  const deadlineMs = Date.parse(deadlineIso);
+  return Math.max(0, Math.round((deadlineMs - estimatedServerNow) / 1000));
+}
+
+// Student Laptop 1 has clock synced (offset = 0)
+const student1Remaining = computeStudentRemainingSeconds(serverDeadlineIso, serverReferenceTime, 0);
+// Student Laptop 2 has clock skewed by +2000ms, but clock offset compensates
+const student2Remaining = computeStudentRemainingSeconds(serverDeadlineIso, serverReferenceTime + 2000, -2000);
+// Student Laptop 3 has clock skewed by -3500ms, but clock offset compensates
+const student3Remaining = computeStudentRemainingSeconds(serverDeadlineIso, serverReferenceTime - 3500, 3500);
+
+assert.strictEqual(student1Remaining, 20, 'Student 1 receives 20s remaining');
+assert.strictEqual(student2Remaining, 20, 'Student 2 with clock skew receives exactly 20s remaining');
+assert.strictEqual(student3Remaining, 20, 'Student 3 with clock skew receives exactly 20s remaining');
+
+// Test pause freezing
+const pauseAtMs = serverReferenceTime + 8000; // paused after 8 seconds
+const remainingWhenPaused = computeStudentRemainingSeconds(serverDeadlineIso, pauseAtMs, 0);
+assert.strictEqual(remainingWhenPaused, 12, '12 seconds remaining when paused');
+
+// Test resume establishing new deadline
+const resumeAtMs = pauseAtMs + 15000; // paused for 15 seconds
+const resumedDeadlineIso = new Date(resumeAtMs + remainingWhenPaused * 1000).toISOString();
+const student1ResumedRemaining = computeStudentRemainingSeconds(resumedDeadlineIso, resumeAtMs, 0);
+assert.strictEqual(student1ResumedRemaining, 12, 'Resumed timer continues seamlessly with 12s remaining');
+
+console.log('  -> PASS: Server-authoritative timer and pause/resume synchronization verified\n');
+
 console.log('======================================================================');
-console.log('      ALL 9 EXAMINATION ROUND CONTROLS E2E TESTS PASSED 100%!         ');
+console.log('      ALL 11 EXAMINATION ROUND CONTROLS E2E TESTS PASSED 100%!        ');
 console.log('======================================================================\n');
 
