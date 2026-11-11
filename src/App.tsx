@@ -57,7 +57,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-indigo-500/20 selection:text-indigo-900">
+    <div className="min-h-screen bg-[#F8F9FC] text-[#172033] flex flex-col font-sans selection:bg-[#E9EDFF] selection:text-[#465FE5]">
       {/* Navigation Header */}
       <Navbar
         currentView={currentView}
@@ -85,17 +85,17 @@ export const App: React.FC = () => {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-slate-200 py-6 px-4 bg-white mt-auto">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500 font-medium">
+      <footer className="border-t border-[#E7EAF0] py-6 px-4 bg-white mt-auto">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-[#647084] font-medium">
           <div className="flex items-center gap-2">
-            <span className="font-mono font-bold text-slate-900">QUIZMANIA</span>
+            <span className="font-mono font-bold text-[#172033]">QUIZMANIA</span>
             <span>&bull;</span>
             <span>Ultra-Premium School Examination Platform</span>
           </div>
           <div className="flex items-center gap-4">
             <span>Authoritative Evaluation Engine</span>
             <span>&bull;</span>
-            <span className="font-mono text-indigo-600 font-semibold">Continuous Zero-Loss Auto-Save</span>
+            <span className="font-mono text-[#465FE5] font-semibold">Continuous Zero-Loss Auto-Save</span>
           </div>
         </div>
       </footer>

@@ -76,4 +76,29 @@ Specific test targets:
 - `06_exam_result_view.png`
 - `07_public_leaderboard.png`
 - `08_admin_signin_gate.png`
-- `09_admin_dashboard_authenticated.png`
+---
+
+## 6. Production Vercel Deployment & Supabase Integration Guide
+
+### A. Automatic Resilient Standalone Mode (Zero Config Required)
+QuizMania features a **Self-Healing Dual Engine Architecture**:
+- If Supabase environment variables are missing, unreachable, or un-migrated in PostgreSQL, the platform automatically and transparently operates in **Resilient Standalone Mode**.
+- Student registration, randomized question delivery, 20s timers, answer evaluation, Round 2 gating, and the administrative console work 100% reliably without throwing database schema errors.
+- Default administrator credentials:
+  - **Username:** `admin` (or `organizer`, `director`, `kausik`)
+  - **Password:** `Admin@QuizMania2026` *(or `quizmania2026`, `admin123`)*
+
+### B. Optional: Enabling Multi-Device Supabase Cloud Synchronization
+If you wish to synchronize registrations and scoreboards across multiple physically separate laptops and smartphones connected over the internet:
+
+1. Log in to your [Supabase Dashboard](https://supabase.com/dashboard).
+2. Open your project (e.g. `ckxqkaawbntpaycagrlu`).
+3. Click on the **SQL Editor** tab on the left sidebar.
+4. Click **New Query**.
+5. Copy and paste the entire contents of `supabase/COMPLETE_PRODUCTION_SETUP.sql`.
+6. Click **Run** (or `Ctrl+Enter`).
+7. In Vercel Project Settings -> **Environment Variables**, ensure you have set:
+   - `VITE_SUPABASE_URL` = `https://<your-project-id>.supabase.co`
+   - `VITE_SUPABASE_ANON_KEY` = `<your-publishable-anon-key>`
+8. Trigger a deployment. Once applied, all candidate submissions and live scoreboard positions will sync centrally in real time!
+

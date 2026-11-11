@@ -11,6 +11,7 @@
     "test:simple": "node scripts/test-simplified-architecture.cjs",
     "test:contracts": "node scripts/test-database-security-contracts.cjs",
     "test:remediation": "node scripts/test-production-remediation.cjs",
+    "test:parity": "node scripts/test-production-parity.cjs",
     "test:eval": "node scripts/test-official-evaluation.cjs",
     "test:journey": "node scripts/test-exam-journey.cjs",
     "test:security": "node scripts/test-admin-security.cjs",
